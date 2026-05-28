@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import threading
 import time
+import traceback
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 
@@ -143,3 +145,8 @@ class TaskRunner:
         except Exception as e:
             self.error_msg = str(e)
             self.state = "error"
+            log_dir = Path("output/log")
+            log_dir.mkdir(parents=True, exist_ok=True)
+            with open(log_dir / "task_runner_error.log", "a", encoding="utf-8") as f:
+                f.write(f"\n--- Error in step: {self.current_label} ---\n")
+                f.write(traceback.format_exc())

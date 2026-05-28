@@ -1,6 +1,7 @@
 import pandas as pd
 import os
 import re
+from difflib import SequenceMatcher
 from rich.panel import Panel
 from rich.console import Console
 import autocorrect_py as autocorrect
@@ -56,6 +57,31 @@ def show_difference(str1, str2):
     print("Position markers: " + "".join("^" if i in diff_positions else " " for i in range(max(len(str1), len(str2)))))
     print(f"Difference indices: {diff_positions}")
 
+def fuzzy_find_sentence(full_words_str, clean_sentence, current_pos):
+    """Find a near match for ASR spelling differences while preserving order."""
+    sentence_len = len(clean_sentence)
+    if sentence_len == 0:
+        return None
+
+    best_match = None
+    best_score = 0
+    max_start = min(len(full_words_str) - 1, current_pos + max(500, sentence_len * 5))
+    min_candidate_len = max(1, int(sentence_len * 0.75))
+    max_candidate_len = max(min_candidate_len, int(sentence_len * 1.25))
+
+    for start in range(current_pos, max_start + 1):
+        for candidate_len in range(min_candidate_len, max_candidate_len + 1):
+            end = start + candidate_len
+            if end > len(full_words_str):
+                break
+            candidate = full_words_str[start:end]
+            score = SequenceMatcher(None, clean_sentence, candidate).ratio()
+            if score > best_score:
+                best_score = score
+                best_match = (start, end, candidate, score)
+
+    return best_match if best_match and best_score >= 0.78 else None
+
 def get_sentence_timestamps(df_words, df_sentences):
     time_stamp_list = []
     
@@ -74,6 +100,7 @@ def get_sentence_timestamps(df_words, df_sentences):
     for idx, sentence in df_sentences['Source'].items():
         clean_sentence = remove_punctuation(sentence.lower()).replace(" ", "")
         sentence_len = len(clean_sentence)
+        sentence_start_pos = current_pos
         
         match_found = False
         while current_pos <= len(full_words_str) - sentence_len:
@@ -92,6 +119,23 @@ def get_sentence_timestamps(df_words, df_sentences):
             current_pos += 1
             
         if not match_found:
+            fuzzy_match = fuzzy_find_sentence(full_words_str, clean_sentence, sentence_start_pos)
+            if fuzzy_match:
+                start_pos, end_pos, matched_text, score = fuzzy_match
+                start_word_idx = position_to_word_idx[start_pos]
+                end_word_idx = position_to_word_idx[end_pos - 1]
+                print(
+                    f"\n⚠️ Fuzzy timestamp match used for sentence: {sentence}\n"
+                    f"Similarity: {score:.3f}\n"
+                    f"Matched ASR text: {matched_text}"
+                )
+                time_stamp_list.append((
+                    float(df_words['start'][start_word_idx]),
+                    float(df_words['end'][end_word_idx])
+                ))
+                current_pos = end_pos
+                continue
+
             print(f"\n⚠️ Warning: No exact match found for sentence: {sentence}")
             show_difference(clean_sentence, 
                           full_words_str[current_pos:current_pos+len(clean_sentence)])

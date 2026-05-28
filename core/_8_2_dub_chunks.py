@@ -1,14 +1,16 @@
 import datetime
+import os
 import re
 import pandas as pd
 from core._8_1_audio_task import time_diff_seconds
-from core.asr_backend.audio_preprocess import get_audio_duration
+from core.asr_backend.audio_preprocess import convert_video_to_audio, get_audio_duration
+from core._1_ytdlp import find_video_files
 from core.tts_backend.estimate_duration import init_estimator, estimate_duration
 from core.utils import *
 from core.utils.models import *
 
-SRC_SRT = "output/src.srt"
-TRANS_SRT = "output/trans.srt"
+SRC_SRT = "output/audio/src_subs_for_audio.srt"
+TRANS_SRT = "output/audio/trans_subs_for_audio.srt"
 MAX_MERGE_COUNT = 5
 ESTIMATOR = None
 
@@ -66,13 +68,16 @@ def analyze_subtitle_timing_and_speed(df):
     for i in range(len(df) - 1):
         current_end = datetime.datetime.strptime(df.loc[i, 'end_time'], '%H:%M:%S.%f').time()
         next_start = datetime.datetime.strptime(df.loc[i + 1, 'start_time'], '%H:%M:%S.%f').time()
-        df.loc[i, 'gap'] = time_diff_seconds(current_end, next_start, datetime.date.today())
+        df.loc[i, 'gap'] = max(
+            0,
+            time_diff_seconds(current_end, next_start, datetime.date.today()),
+        )
     
     # Set the gap for the last line
     last_end = datetime.datetime.strptime(df.iloc[-1]['end_time'], '%H:%M:%S.%f').time()
     last_end_seconds = (last_end.hour * 3600 + last_end.minute * 60 + 
                        last_end.second + last_end.microsecond / 1000000)
-    df.iloc[-1, df.columns.get_loc('gap')] = whole_dur - last_end_seconds
+    df.iloc[-1, df.columns.get_loc('gap')] = max(0, whole_dur - last_end_seconds)
     
     df['tolerance'] = df['gap'].apply(lambda x: TOLERANCE if x > TOLERANCE else x)
     df['tol_dur'] = df['duration'] + df['tolerance']
@@ -131,6 +136,8 @@ def process_cutoffs(df):
 
 def gen_dub_chunks():
     rprint("[🎬 Starting] Generating dubbing chunks...")
+    if not os.path.exists(_RAW_AUDIO_FILE):
+        convert_video_to_audio(find_video_files())
     df = pd.read_excel(_8_1_AUDIO_TASK)
     
     rprint("[📊 Processing] Analyzing timing and speed...")

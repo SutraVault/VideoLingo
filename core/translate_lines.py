@@ -20,6 +20,7 @@ def valid_translate_result(result: dict, required_keys: list, required_sub_keys:
 
 def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_to_note_prompt, summary_prompt, index = 0):
     shared_prompt = generate_shared_prompt(previous_content_prompt, after_cotent_prompt, summary_prompt, things_to_note_prompt)
+    source_lines = lines.split('\n')
 
     # Retry translation if the length of the original text and the translated text are not the same, or if the specified key is missing
     def retry_translation(prompt, length, step_name):
@@ -43,6 +44,10 @@ def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_
     faith_result = retry_translation(prompt1, len(lines.split('\n')), 'faithfulness')
 
     for i in faith_result:
+        if "origin" not in faith_result[i]:
+            line_index = int(i) - 1
+            if 0 <= line_index < len(source_lines):
+                faith_result[i]["origin"] = source_lines[line_index]
         faith_result[i]["direct"] = faith_result[i]["direct"].replace('\n', ' ')
 
     # If reflect_translate is False or not set, use faithful translation directly

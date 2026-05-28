@@ -11,6 +11,35 @@ from translations.translations import translate as t
 
 OUTPUT_DIR = "output"
 
+def clear_output_dir():
+    if not os.path.exists(OUTPUT_DIR):
+        return
+
+    skipped = []
+
+    def handle_remove_error(func, path, exc_info):
+        try:
+            os.chmod(path, 0o700)
+            func(path)
+        except Exception:
+            skipped.append(path)
+
+    for name in os.listdir(OUTPUT_DIR):
+        path = os.path.join(OUTPUT_DIR, name)
+        if os.path.isdir(path):
+            shutil.rmtree(path, onerror=handle_remove_error)
+        else:
+            try:
+                os.remove(path)
+            except Exception:
+                skipped.append(path)
+
+    if skipped:
+        st.warning(
+            "Some output files are still in use and could not be deleted. "
+            "Stop any running TTS/FFmpeg process before reselecting if stale files cause issues."
+        )
+
 def download_video_section():
     st.header(t("a. Download or Upload Video"))
     with st.container(border=True):
@@ -19,8 +48,7 @@ def download_video_section():
             st.video(video_file)
             if st.button(t("Delete and Reselect"), key="delete_video_button"):
                 os.remove(video_file)
-                if os.path.exists(OUTPUT_DIR):
-                    shutil.rmtree(OUTPUT_DIR)
+                clear_output_dir()
                 sleep(1)
                 st.rerun()
             return True
@@ -47,8 +75,7 @@ def download_video_section():
 
             uploaded_file = st.file_uploader(t("Or upload video"), type=load_key("allowed_video_formats") + load_key("allowed_audio_formats"))
             if uploaded_file:
-                if os.path.exists(OUTPUT_DIR):
-                    shutil.rmtree(OUTPUT_DIR)
+                clear_output_dir()
                 os.makedirs(OUTPUT_DIR, exist_ok=True)
                 
                 raw_name = uploaded_file.name.replace(' ', '_')

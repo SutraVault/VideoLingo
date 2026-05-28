@@ -8,6 +8,8 @@ import pandas as pd
 import soundfile as sf
 console = Console()
 from core.asr_backend.demucs_vl import demucs_audio
+from core.asr_backend.audio_preprocess import convert_video_to_audio
+from core._1_ytdlp import find_video_files
 from core.utils.models import *
 
 def time_to_samples(time_str, sr):
@@ -24,8 +26,10 @@ def extract_audio(audio_data, sr, start_time, end_time, out_file):
     sf.write(out_file, audio_data[start:end], sr)
 
 def extract_refer_audio_main():
+    if not os.path.exists(_RAW_AUDIO_FILE):
+        convert_video_to_audio(find_video_files())
     demucs_audio() #!!! in case demucs not run
-    if os.path.exists(os.path.join(_AUDIO_SEGS_DIR, '1.wav')):
+    if os.path.exists(os.path.join(_AUDIO_REFERS_DIR, '1.wav')):
         rprint(Panel("Audio segments already exist, skipping extraction", title="Info", border_style="blue"))
         return
 

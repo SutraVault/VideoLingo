@@ -4,6 +4,7 @@ import concurrent.futures
 
 from core._3_2_split_meaning import split_sentence
 from core.prompts import get_align_prompt
+from core.utils.excel_utils import read_excel_with_aliases
 from rich.panel import Panel
 from rich.console import Console
 from rich.table import Table
@@ -30,19 +31,81 @@ def calc_len(text: str) -> float:
 
     return sum(char_weight(char) for char in text)
 
+def split_text_by_weights(text: str, weights: List[float]) -> List[str]:
+    """Fallback splitter used when the LLM returns empty alignment parts."""
+    text = str(text).strip()
+    if not weights:
+        return [text] if text else []
+
+    if not text:
+        return [""] * len(weights)
+
+    total_weight = sum(max(weight, 1) for weight in weights)
+    target_lengths = [max(1, round(len(text) * max(weight, 1) / total_weight)) for weight in weights]
+
+    parts = []
+    start = 0
+    for i, target_length in enumerate(target_lengths):
+        remaining_parts = len(weights) - i
+        if remaining_parts == 1:
+            parts.append(text[start:].strip())
+            break
+
+        remaining_chars = len(text) - start
+        cut = start + min(target_length, remaining_chars - (remaining_parts - 1))
+        cut = max(start + 1, cut)
+
+        search_start = max(start + 1, cut - 8)
+        search_end = min(len(text) - (remaining_parts - 1), cut + 8)
+        candidates = [
+            pos + 1
+            for pos in range(search_start - 1, search_end)
+            if text[pos] in " ,，.。;；:：!?！？、"
+        ]
+        if candidates:
+            cut = min(candidates, key=lambda pos: abs(pos - cut))
+
+        parts.append(text[start:cut].strip())
+        start = cut
+
+    return [part if part else text[:1] for part in parts]
+
+def normalize_align_data(response_data, tr_sub: str, src_parts: List[str]) -> List[str]:
+    align_data = response_data.get('align', [])
+    tr_parts = []
+    for i, item in enumerate(align_data):
+        key = f'target_part_{i+1}'
+        value = item.get(key, item.get('target_part', item.get('target', '')))
+        tr_parts.append(str(value).strip())
+
+    if len(tr_parts) == len(src_parts) and all(tr_parts):
+        return tr_parts
+
+    console.print(
+        "[yellow]Warning: LLM subtitle alignment returned empty or incomplete target parts. "
+        "Using local proportional fallback split.[/yellow]"
+    )
+    return split_text_by_weights(tr_sub, [calc_len(part) for part in src_parts])
+
 def align_subs(src_sub: str, tr_sub: str, src_part: str) -> Tuple[List[str], List[str], str]:
     align_prompt = get_align_prompt(src_sub, tr_sub, src_part)
+    src_parts = src_part.split('\n')
+    expected_parts = len(src_parts)
     
     def valid_align(response_data):
         if 'align' not in response_data:
             return {"status": "error", "message": "Missing required key: `align`"}
-        if len(response_data['align']) < 2:
-            return {"status": "error", "message": "Align does not contain more than 1 part as expected!"}
+        if len(response_data['align']) != expected_parts:
+            return {
+                "status": "error",
+                "message": f"Align returned {len(response_data['align'])} parts, expected {expected_parts}",
+            }
+        if not all(isinstance(item, dict) for item in response_data['align']):
+            return {"status": "error", "message": "`align` must be a list of JSON objects"}
         return {"status": "success", "message": "Align completed"}
-    parsed = ask_gpt(align_prompt, resp_type='json', valid_def=valid_align, log_title='align_subs')
-    align_data = parsed['align']
-    src_parts = src_part.split('\n')
-    tr_parts = [item[f'target_part_{i+1}'].strip() for i, item in enumerate(align_data)]
+
+    parsed = ask_gpt(align_prompt, resp_type='json', valid_def=valid_align, log_title='align_subs_v2')
+    tr_parts = normalize_align_data(parsed, tr_sub, src_parts)
     
     whisper_language = load_key("whisper.language")
     language = load_key("whisper.detected_language") if whisper_language == 'auto' else whisper_language
@@ -85,18 +148,23 @@ def split_align_subs(src_lines: List[str], tr_lines: List[str]):
         remerged_tr_lines[i] = tr_remerged
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=load_key("max_workers")) as executor:
-        executor.map(process, to_split)
+        list(executor.map(process, to_split))
     
     # Flatten `src_lines` and `tr_lines`
     src_lines = [item for sublist in src_lines for item in (sublist if isinstance(sublist, list) else [sublist])]
     tr_lines = [item for sublist in tr_lines for item in (sublist if isinstance(sublist, list) else [sublist])]
+    if len(src_lines) != len(tr_lines):
+        raise ValueError(
+            f"Subtitle split alignment produced mismatched lengths: "
+            f"{len(src_lines)} source rows vs {len(tr_lines)} translation rows"
+        )
     
     return src_lines, tr_lines, remerged_tr_lines
 
 def split_for_sub_main():
     console.print("[bold green]🚀 Start splitting subtitles...[/bold green]")
     
-    df = pd.read_excel(_4_2_TRANSLATION)
+    df = read_excel_with_aliases(_4_2_TRANSLATION, required_columns=['Source', 'Translation'])
     src = df['Source'].tolist()
     trans = df['Translation'].tolist()
     
@@ -106,7 +174,7 @@ def split_for_sub_main():
     
     for attempt in range(3):  # 多次切割
         console.print(Panel(f"🔄 Split attempt {attempt + 1}", expand=False))
-        split_src, split_trans, remerged = split_align_subs(src.copy(), trans)
+        split_src, split_trans, remerged = split_align_subs(src.copy(), trans.copy())
         
         # 检查是否所有字幕都符合长度要求
         if all(len(src) <= MAX_SUB_LENGTH for src in split_src) and \
@@ -122,6 +190,12 @@ def split_for_sub_main():
     elif len(remerged) > len(src):
         src += [None] * (len(remerged) - len(src))
     
+    if len(split_src) != len(split_trans):
+        raise ValueError(
+            f"Cannot write subtitle split output with mismatched lengths: "
+            f"{len(split_src)} source rows vs {len(split_trans)} translation rows"
+        )
+
     pd.DataFrame({'Source': split_src, 'Translation': split_trans}).to_excel(_5_SPLIT_SUB, index=False)
     pd.DataFrame({'Source': src, 'Translation': remerged}).to_excel(_5_REMERGED, index=False)
 

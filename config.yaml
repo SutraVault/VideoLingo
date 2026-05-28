@@ -11,12 +11,12 @@ display_language: "zh-CN"
 
 # API settings
 api:
-  key: 'your-api-key'
-  base_url: 'https://yunwu.ai'
-  model: ''
+  key: 'ollama'
+  base_url: 'http://localhost:11434/v1'
+  model: 'qwen2.5-14b-8k:latest'
   llm_support_json: false
 # *Number of LLM multi-threaded accesses, set to 1 if using local LLM
-max_workers: 4
+max_workers: 1
 
 # Language settings, written into the prompt, can be described in natural language
 target_language: '简体中文'
@@ -39,6 +39,14 @@ whisper:
 
 # Whether to burn subtitles into the video
 burn_subtitles: true
+
+# Text watermark settings for the final dubbed video
+watermark:
+  enabled: true
+  text: ' 译制：jlcaudemars@B站'
+  position: 'top_right'
+  opacity: 0.45
+  font_size: 20
 
 ## ======================== Advanced Settings ======================== ##
 # *🔬 h264_nvenc GPU acceleration for ffmpeg, make sure your GPU supports it
@@ -64,14 +72,20 @@ summary_length: 8000
 max_split_length: 20
 
 # *Whether to reflect the translation result in the original text
-reflect_translate: true
+reflect_translate: false
 
 # *Whether to pause after extracting professional terms and before translation, allowing users to manually adjust the terminology table output\log\terminology.json
 pause_before_translate: false
 
+# *Whether to pause after generating output\log\translation_results.xlsx, allowing users to manually proofread subtitles before subtitle splitting and dubbing steps
+pause_after_translate: true
+
+# Whether to automatically start dubbing after subtitle processing completes
+auto_start_dubbing_after_subtitles: true
+
 ## ======================== Dubbing Settings ======================== ##
-# TTS selection [sf_fish_tts, openai_tts, gpt_sovits, azure_tts, fish_tts, edge_tts, custom_tts]
-tts_method: 'azure_tts'
+# TTS selection [sf_fish_tts, openai_tts, gpt_sovits, indextts, azure_tts, fish_tts, edge_tts, custom_tts]
+tts_method: 'indextts'
 
 # SiliconFlow FishTTS
 sf_fish_tts:
@@ -109,12 +123,38 @@ sf_cosyvoice2:
 
 # Edge TTS configuration
 edge_tts:
-  voice: 'zh-CN-XiaoxiaoNeural'
+  voice: 'zh-CN-YunjianNeural'
 
 # SoVITS configuration
 gpt_sovits:
   character: 'Huanyuv2'
   refer_mode: 3
+
+# Local IndexTTS2 clone
+indextts:
+  host: '127.0.0.1'
+  port: 9871
+  api_url: 'http://127.0.0.1:9871/tts'
+  repo_dir: '../index-tts'
+  use_uv: true
+  uv_path: 'C:/Users/micro/miniconda3/Scripts/uv.exe'
+  python: '../index-tts/.venv/Scripts/python.exe'
+  model_dir: '../index-tts/checkpoints'
+  # 2: use output/audio/refers/1.wav for all lines; 3: use output/audio/refers/{number}.wav
+  refer_mode: 2
+  fp16: true
+  cuda_kernel: true
+  show_console: false
+  deepspeed: false
+  accel: false
+  torch_compile: false
+  use_emo_text: false
+  emo_text: ''
+  emo_alpha: 0.6
+  use_random: false
+  max_text_tokens_per_segment: 120
+  startup_timeout: 300
+  request_timeout: 600
 
 f5tts:
   302_api: 'YOUR_302_API_KEY'

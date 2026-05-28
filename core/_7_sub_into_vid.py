@@ -8,7 +8,7 @@ from core.utils import *
 SRC_FONT_SIZE = 15
 TRANS_FONT_SIZE = 17
 FONT_NAME = 'Arial'
-TRANS_FONT_NAME = 'Arial'
+TRANS_FONT_NAME = 'Microsoft YaHei'
 
 # Linux need to install google noto fonts: apt-get install fonts-noto
 if platform.system() == 'Linux':
@@ -40,12 +40,12 @@ def check_gpu_available():
     except:
         return False
 
-def merge_subtitles_to_video():
+def merge_subtitles_to_video(force_burn=False):
     video_file = find_video_files()
     os.makedirs(os.path.dirname(OUTPUT_VIDEO), exist_ok=True)
 
     # Check resolution
-    if not load_key("burn_subtitles"):
+    if not force_burn and not load_key("burn_subtitles"):
         rprint("[bold yellow]Warning: A 0-second black video will be generated as a placeholder as subtitles are not burned in.[/bold yellow]")
 
         # Create a black frame

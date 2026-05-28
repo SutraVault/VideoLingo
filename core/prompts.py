@@ -275,6 +275,8 @@ Your task is to create the best splitting scheme for the {targ_lang} subtitles b
 2. Split the {targ_lang} subtitles according to the pre-processed {src_lang} split version
 3. Never leave empty lines. If it's difficult to split based on meaning, you may appropriately rewrite the sentences that need to be aligned
 4. Do not add comments or explanations in the translation, as the subtitles are for the audience to read
+5. Every align item must contain the exact numbered target key shown in the JSON template, and every target_part value must be non-empty
+6. If a source part has no direct target-language words, rewrite or redistribute the target subtitle so that the part still has a short readable target subtitle
 
 ## INPUT
 <subtitles>

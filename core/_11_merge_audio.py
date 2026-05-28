@@ -1,6 +1,7 @@
 import os
+import ast
 import pandas as pd
-import subprocess
+import numpy as np
 from pydub import AudioSegment
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.console import Console
@@ -16,10 +17,19 @@ OUTPUT_FILE_TEMPLATE = f"{_AUDIO_SEGS_DIR}/{{}}.wav"
 def load_and_flatten_data(excel_file):
     """Load and flatten Excel data"""
     df = pd.read_excel(excel_file)
-    lines = [eval(line) if isinstance(line, str) else line for line in df['lines'].tolist()]
+
+    def parse_cell(value):
+        if not isinstance(value, str):
+            return value
+        try:
+            return ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            return eval(value, {"__builtins__": {}}, {"np": np})
+
+    lines = [parse_cell(line) for line in df['lines'].tolist()]
     lines = [item for sublist in lines for item in sublist]
     
-    new_sub_times = [eval(time) if isinstance(time, str) else time for time in df['new_sub_times'].tolist()]
+    new_sub_times = [parse_cell(time) for time in df['new_sub_times'].tolist()]
     new_sub_times = [item for sublist in new_sub_times for item in sublist]
     
     return df, lines, new_sub_times
@@ -35,21 +45,13 @@ def get_audio_files(df):
             audios.append(temp_file)
     return audios
 
-def process_audio_segment(audio_file):
-    """Process a single audio segment with MP3 compression"""
-    temp_file = f"{audio_file}_temp.mp3"
-    ffmpeg_cmd = [
-        'ffmpeg', '-y',
-        '-i', audio_file,
-        '-ar', '16000',
-        '-ac', '1',
-        '-b:a', '64k',
-        temp_file
-    ]
-    subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    audio_segment = AudioSegment.from_mp3(temp_file)
-    os.remove(temp_file)
-    return audio_segment
+def process_audio_segment(audio_file, sample_rate):
+    """Load a generated WAV segment without an extra per-segment ffmpeg pass."""
+    return (
+        AudioSegment.from_wav(audio_file)
+        .set_frame_rate(sample_rate)
+        .set_channels(1)
+    )
 
 def merge_audio_segments(audios, new_sub_times, sample_rate):
     merged_audio = AudioSegment.silent(duration=0, frame_rate=sample_rate)
@@ -63,7 +65,7 @@ def merge_audio_segments(audios, new_sub_times, sample_rate):
                 progress.advance(merge_task)
                 continue
                 
-            audio_segment = process_audio_segment(audio_file)
+            audio_segment = process_audio_segment(audio_file, sample_rate)
             start_time, end_time = time_range
             
             # Add silence segment

@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import html
 from translations.translations import translate as t
 from translations.translations import DISPLAY_LANGUAGES
 from core.utils import *
@@ -43,6 +44,46 @@ def _search_models(search_term, **kwargs):
     if search_term not in matched:
         matched.insert(0, search_term)
     return matched
+
+def _watermark_preview_style(position):
+    positions = {
+        "top_left": "top: 12px; left: 12px;",
+        "top_right": "top: 12px; right: 12px;",
+        "bottom_left": "bottom: 12px; left: 12px;",
+        "bottom_right": "bottom: 12px; right: 12px;",
+        "center": "top: 50%; left: 50%; transform: translate(-50%, -50%);",
+    }
+    return positions.get(position, positions["top_right"])
+
+def _render_watermark_preview(text, position, opacity, font_size):
+    preview_font_size = max(8, min(48, int(font_size * 0.75)))
+    st.markdown(
+        f"""
+        <div style="
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            background: #111;
+            border: 1px solid #333;
+            overflow: hidden;
+        ">
+            <div style="
+                position: absolute;
+                {_watermark_preview_style(position)}
+                color: rgba(255, 255, 255, {opacity});
+                font-size: {preview_font_size}px;
+                font-family: Arial, sans-serif;
+                font-weight: 600;
+                text-shadow: 0 0 2px rgba(0, 0, 0, {opacity});
+                white-space: nowrap;
+                max-width: calc(100% - 24px);
+                overflow: hidden;
+                text-overflow: ellipsis;
+            ">{html.escape(text) if text else ""}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def page_setting():
@@ -226,7 +267,94 @@ def page_setting():
         if burn_subtitles != load_key("burn_subtitles"):
             update_key("burn_subtitles", burn_subtitles)
             st.rerun()
+
+        reflect_translate = st.toggle(
+            t("Reflect Translate"),
+            value=load_key("reflect_translate"),
+            help=t(
+                "Run a second translation pass to make subtitles more natural. Disable for faster local LLM translation."
+            ),
+        )
+        if reflect_translate != load_key("reflect_translate"):
+            update_key("reflect_translate", reflect_translate)
+            st.rerun()
+
+        pause_after_translate = st.toggle(
+            t("Pause After Translate"),
+            value=load_key("pause_after_translate"),
+            help=t(
+                "Pause after generating translation_results.xlsx so you can proofread before the next steps"
+            ),
+        )
+        if pause_after_translate != load_key("pause_after_translate"):
+            update_key("pause_after_translate", pause_after_translate)
+            st.rerun()
     with st.expander(t("Dubbing Settings"), expanded=True):
+        watermark_enabled = st.toggle(
+            t("Enable Text Watermark"),
+            value=load_key("watermark.enabled"),
+            help=t("Add a text watermark to the final dubbed video"),
+        )
+        if watermark_enabled != load_key("watermark.enabled"):
+            update_key("watermark.enabled", watermark_enabled)
+            st.rerun()
+
+        watermark_text = st.text_input(
+            t("Watermark Text"),
+            value=load_key("watermark.text"),
+            help=t("Text shown as the watermark on the final dubbed video"),
+        )
+        if watermark_text != load_key("watermark.text"):
+            update_key("watermark.text", watermark_text)
+
+        position_options = {
+            "top_left": t("Top Left"),
+            "top_right": t("Top Right"),
+            "bottom_left": t("Bottom Left"),
+            "bottom_right": t("Bottom Right"),
+            "center": t("Center"),
+        }
+        watermark_position = st.selectbox(
+            t("Watermark Position"),
+            options=list(position_options.keys()),
+            format_func=lambda value: position_options[value],
+            index=list(position_options.keys()).index(load_key("watermark.position"))
+            if load_key("watermark.position") in position_options
+            else 1,
+        )
+        if watermark_position != load_key("watermark.position"):
+            update_key("watermark.position", watermark_position)
+            st.rerun()
+
+        watermark_opacity = st.slider(
+            t("Watermark Opacity"),
+            min_value=0.0,
+            max_value=1.0,
+            value=float(load_key("watermark.opacity")),
+            step=0.05,
+        )
+        if watermark_opacity != load_key("watermark.opacity"):
+            update_key("watermark.opacity", watermark_opacity)
+
+        watermark_font_size = st.slider(
+            t("Watermark Size"),
+            min_value=12,
+            max_value=96,
+            value=int(load_key("watermark.font_size")),
+            step=2,
+        )
+        if watermark_font_size != load_key("watermark.font_size"):
+            update_key("watermark.font_size", watermark_font_size)
+
+        if watermark_enabled:
+            st.caption(t("Watermark Preview"))
+            _render_watermark_preview(
+                watermark_text,
+                watermark_position,
+                watermark_opacity,
+                watermark_font_size,
+            )
+
         tts_methods = [
             "azure_tts",
             "openai_tts",
@@ -234,6 +362,7 @@ def page_setting():
             "sf_fish_tts",
             "edge_tts",
             "gpt_sovits",
+            "indextts",
             "custom_tts",
             "sf_cosyvoice2",
             "f5tts",
@@ -312,6 +441,68 @@ def page_setting():
             )
             if selected_refer_mode != load_key("gpt_sovits.refer_mode"):
                 update_key("gpt_sovits.refer_mode", selected_refer_mode)
+                st.rerun()
+
+        elif select_tts == "indextts":
+            st.info("Use local IndexTTS2 with VideoLingo reference audio")
+            config_input("IndexTTS Repo Dir", "indextts.repo_dir")
+            config_input("IndexTTS Model Dir", "indextts.model_dir")
+
+            use_uv = st.checkbox("Launch with uv", value=load_key("indextts.use_uv"))
+            if use_uv != load_key("indextts.use_uv"):
+                update_key("indextts.use_uv", use_uv)
+                st.rerun()
+            if use_uv:
+                config_input("uv Path", "indextts.uv_path")
+            else:
+                config_input("IndexTTS Python", "indextts.python")
+
+            refer_mode_options = {
+                2: t("Mode 2: Use first audio from video as reference"),
+                3: t("Mode 3: Use each audio from video as reference"),
+            }
+            selected_refer_mode = st.selectbox(
+                t("Refer Mode"),
+                options=list(refer_mode_options.keys()),
+                format_func=lambda x: refer_mode_options[x],
+                index=list(refer_mode_options.keys()).index(
+                    load_key("indextts.refer_mode")
+                ),
+                help="Configure reference audio mode for IndexTTS",
+            )
+            if selected_refer_mode != load_key("indextts.refer_mode"):
+                update_key("indextts.refer_mode", selected_refer_mode)
+                st.rerun()
+
+            use_fp16 = st.checkbox("FP16", value=load_key("indextts.fp16"))
+            if use_fp16 != load_key("indextts.fp16"):
+                update_key("indextts.fp16", use_fp16)
+                st.rerun()
+
+            use_cuda_kernel = st.checkbox("CUDA Kernel", value=load_key("indextts.cuda_kernel"))
+            if use_cuda_kernel != load_key("indextts.cuda_kernel"):
+                update_key("indextts.cuda_kernel", use_cuda_kernel)
+                st.rerun()
+
+            show_console = st.checkbox("Show server console", value=load_key("indextts.show_console"))
+            if show_console != load_key("indextts.show_console"):
+                update_key("indextts.show_console", show_console)
+                st.rerun()
+
+            use_emo_text = st.checkbox("Use emotion from text", value=load_key("indextts.use_emo_text"))
+            if use_emo_text != load_key("indextts.use_emo_text"):
+                update_key("indextts.use_emo_text", use_emo_text)
+                st.rerun()
+
+            emo_alpha = st.slider(
+                "Emotion alpha",
+                min_value=0.0,
+                max_value=1.0,
+                value=float(load_key("indextts.emo_alpha")),
+                step=0.05,
+            )
+            if emo_alpha != load_key("indextts.emo_alpha"):
+                update_key("indextts.emo_alpha", emo_alpha)
                 st.rerun()
 
         elif select_tts == "edge_tts":
