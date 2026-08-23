@@ -113,10 +113,11 @@ def process_transcription(result: Dict) -> pd.DataFrame:
         speaker_id = segment.get('speaker_id', None)
         
         for word in segment['words']:
-            # Check word length
+            # Keep unusually long alignment items. Some alignment models,
+            # especially for languages without spaces, can return a whole
+            # phrase as one item; dropping it here can remove an entire line.
             if len(word["word"]) > 30:
-                rprint(f"[yellow]⚠️ Warning: Detected word longer than 30 characters, skipping: {word['word']}[/yellow]")
-                continue
+                rprint(f"[yellow]⚠️ Warning: Keeping alignment item longer than 30 characters: {word['word']}[/yellow]")
                 
             # ! For French, we need to convert guillemets to empty strings
             word["word"] = word["word"].replace('»', '').replace('«', '')
@@ -167,11 +168,11 @@ def save_results(df: pd.DataFrame):
     if removed_rows > 0:
         rprint(f"[blue]ℹ️ Removed {removed_rows} row(s) with empty text.[/blue]")
     
-    # Check for and remove words longer than 20 characters
+    # Report unusually long alignment items, but do not discard them. They may
+    # be complete phrases returned as a single item by the aligner.
     long_words = df[df['text'].str.len() > 30]
     if not long_words.empty:
-        rprint(f"[yellow]⚠️ Warning: Detected {len(long_words)} word(s) longer than 30 characters. These will be removed.[/yellow]")
-        df = df[df['text'].str.len() <= 30]
+        rprint(f"[yellow]⚠️ Warning: Keeping {len(long_words)} alignment item(s) longer than 30 characters.[/yellow]")
     
     df['text'] = df['text'].apply(lambda x: f'"{x}"')
     df.to_excel(_2_CLEANED_CHUNKS, index=False)

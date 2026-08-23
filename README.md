@@ -166,6 +166,22 @@ VideoLingo supports OpenAI-Like API format and various TTS interfaces:
 
 > **Note:** VideoLingo works with **[302.ai](https://gpt302.saaslink.net/C2oHR9)** - one API key for all services (LLM, WhisperX, TTS). Or run locally with Ollama and Edge-TTS for free, no API needed!
 
+### LLM usage logs
+
+VideoLingo writes LLM request logs to `output/gpt_log`. To summarize request count and token usage estimates for a run:
+
+```bash
+python scripts/analyze_gpt_log.py
+```
+
+To also save a JSON report:
+
+```bash
+python scripts/analyze_gpt_log.py --json-out output/gpt_log/analysis_report.json
+```
+
+The report groups usage by log file, including translation, subtitle splitting, alignment, trimming, and summary requests. If your provider returns OpenAI-compatible `usage` data, exact token totals are shown; otherwise the script reports model-agnostic estimates from saved prompt and response text. During new runs, VideoLingo also writes live usage files to `output/gpt_log/usage_events.json` and `output/gpt_log/usage_summary.json`.
+
 For detailed installation, API configuration, and batch mode instructions, please refer to the documentation: [English](/docs/pages/docs/start.en-US.md) | [中文](/docs/pages/docs/start.zh-CN.md)
 
 ## Current Limitations

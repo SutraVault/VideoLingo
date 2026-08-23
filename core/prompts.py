@@ -126,123 +126,91 @@ Note: Start you answer with ```json and end with ```, do not add any other text.
 ## ================================================================
 # @ step5_translate.py & translate_lines.py
 def generate_shared_prompt(previous_content_prompt, after_content_prompt, summary_prompt, things_to_note_prompt):
-    return f'''### Context Information
-<previous_content>
-{previous_content_prompt}
-</previous_content>
+    def format_context(value):
+        if not value:
+            return "None"
+        if isinstance(value, list):
+            return " / ".join(str(item) for item in value)
+        return str(value)
 
-<subsequent_content>
-{after_content_prompt}
-</subsequent_content>
-
-### Content Summary
-{summary_prompt}
-
-### Points to Note
-{things_to_note_prompt}'''
+    parts = [f"Context summary: {format_context(summary_prompt)}"]
+    previous = format_context(previous_content_prompt)
+    subsequent = format_context(after_content_prompt)
+    if previous != "None":
+        parts.append(f"Previous lines: {previous}")
+    if subsequent != "None":
+        parts.append(f"Next lines: {subsequent}")
+    if things_to_note_prompt:
+        parts.append(f"Terms: {things_to_note_prompt}")
+    return "\n".join(parts)
 
 def get_prompt_faithfulness(lines, shared_prompt):
     TARGET_LANGUAGE = load_key("target_language")
     # Split lines by \n
     line_splits = lines.split('\n')
+    input_rows = [{"id": str(i), "source": line} for i, line in enumerate(line_splits, 1)]
     
     json_dict = {}
     for i, line in enumerate(line_splits, 1):
-        json_dict[f"{i}"] = {"origin": line, "direct": f"direct {TARGET_LANGUAGE} translation {i}."}
-    json_format = json.dumps(json_dict, indent=2, ensure_ascii=False)
+        json_dict[f"{i}"] = {"direct": f"{TARGET_LANGUAGE} translation {i}"}
+    json_format = json.dumps(json_dict, ensure_ascii=False, separators=(',', ':'))
 
     src_language = load_key("whisper.detected_language")
     prompt_faithfulness = f'''
-## Role
-You are a professional Netflix subtitle translator, fluent in both {src_language} and {TARGET_LANGUAGE}, as well as their respective cultures. 
-Your expertise lies in accurately understanding the semantics and structure of the original {src_language} text and faithfully translating it into {TARGET_LANGUAGE} while preserving the original meaning.
-
-## Task
-We have a segment of original {src_language} subtitles that need to be directly translated into {TARGET_LANGUAGE}. These subtitles come from a specific context and may contain specific themes and terminology.
-
-1. Translate the original {src_language} subtitles into {TARGET_LANGUAGE} line by line
-2. Ensure the translation is faithful to the original, accurately conveying the original meaning
-3. Consider the context and professional terminology
+Translate {src_language} subtitles into concise {TARGET_LANGUAGE} subtitles line by line.
+Return exactly one JSON object property for every input id. Do not skip ids.
+Keep meaning faithful, preserve numbering, and use the context/terms below.
+Prefer short wording that can be spoken within the original subtitle timing.
 
 {shared_prompt}
 
-<translation_principles>
-1. Faithful to the original: Accurately convey the content and meaning of the original text, without arbitrarily changing, adding, or omitting content.
-2. Accurate terminology: Use professional terms correctly and maintain consistency in terminology.
-3. Understand the context: Fully comprehend and reflect the background and contextual relationships of the text.
-</translation_principles>
-
 ## INPUT
-<subtitles>
-{lines}
-</subtitles>
+{json.dumps(input_rows, ensure_ascii=False, separators=(',', ':'))}
 
-## Output in only JSON format and no other text
+Output only JSON. Do not echo source text.
 ```json
 {json_format}
 ```
-
-Note: Start you answer with ```json and end with ```, do not add any other text.
 '''
     return prompt_faithfulness.strip()
 
 
 def get_prompt_expressiveness(faithfulness_result, lines, shared_prompt):
     TARGET_LANGUAGE = load_key("target_language")
+    direct_rows = [
+        {"id": str(key), "source": line, "direct": value["direct"]}
+        for key, value, line in zip(faithfulness_result.keys(), faithfulness_result.values(), lines.split('\n'))
+    ]
+    direct_lines = json.dumps(
+        direct_rows,
+        ensure_ascii=False,
+        separators=(',', ':')
+    )
     json_format = {
-        key: {
-            "origin": value["origin"],
-            "direct": value["direct"],
-            "reflect": "your reflection on direct translation",
-            "free": "your free translation"
-        }
+        key: {"free": "natural subtitle translation"}
         for key, value in faithfulness_result.items()
     }
-    json_format = json.dumps(json_format, indent=2, ensure_ascii=False)
+    json_format = json.dumps(json_format, ensure_ascii=False, separators=(',', ':'))
 
     src_language = load_key("whisper.detected_language")
     prompt_expressiveness = f'''
-## Role
-You are a professional Netflix subtitle translator and language consultant.
-Your expertise lies not only in accurately understanding the original {src_language} but also in optimizing the {TARGET_LANGUAGE} translation to better suit the target language's expression habits and cultural background.
-
-## Task
-We already have a direct translation version of the original {src_language} subtitles.
-Your task is to reflect on and improve these direct translations to create more natural and fluent {TARGET_LANGUAGE} subtitles.
-
-1. Analyze the direct translation results line by line, pointing out existing issues
-2. Provide detailed modification suggestions
-3. Perform free translation based on your analysis
-4. Do not add comments or explanations in the translation, as the subtitles are for the audience to read
-5. Do not leave empty lines in the free translation, as the subtitles are for the audience to read
+Rewrite the direct {TARGET_LANGUAGE} translations as natural dubbing subtitles.
+Keep the same numbering and line count. Do not add comments, explanations, or empty lines.
+Use concise spoken language. Avoid literary rewrites, filler words, and long clauses.
+Make each line short enough to be read aloud in the original subtitle timing.
 
 {shared_prompt}
 
-<Translation Analysis Steps>
-Please use a two-step thinking process to handle the text line by line:
-
-1. Direct Translation Reflection:
-   - Evaluate language fluency
-   - Check if the language style is consistent with the original text
-   - Check the conciseness of the subtitles, point out where the translation is too wordy
-
-2. {TARGET_LANGUAGE} Free Translation:
-   - Aim for contextual smoothness and naturalness, conforming to {TARGET_LANGUAGE} expression habits
-   - Ensure it's easy for {TARGET_LANGUAGE} audience to understand and accept
-   - Adapt the language style to match the theme (e.g., use casual language for tutorials, professional terminology for technical content, formal language for documentaries)
-</Translation Analysis Steps>
-   
-## INPUT
-<subtitles>
+Original {src_language} subtitles:
 {lines}
-</subtitles>
 
-## Output in only JSON format and no other text
+Direct {TARGET_LANGUAGE} translations:
+{direct_lines}
+
+Output only JSON.
 ```json
 {json_format}
 ```
-
-Note: Start you answer with ```json and end with ```, do not add any other text.
 '''
     return prompt_expressiveness.strip()
 

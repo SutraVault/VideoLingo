@@ -181,6 +181,17 @@ def gen_dub_chunks():
             return ''
         return re.sub(r'[^\w\s]|[\s]', '', text)
 
+    def safe_text(value):
+        if pd.isna(value):
+            return ''
+        return str(value)
+
+    def origin_lines_for_row(row, count):
+        origin = safe_text(row.get('origin', '')).strip()
+        if not origin:
+            return [''] * max(1, count)
+        return [origin] if count <= 1 else [origin] + [''] * (count - 1)
+
     for idx, row in df.iterrows():
         target = clean_text(row['text'])
         matches = []
@@ -196,14 +207,18 @@ def gen_dub_chunks():
             
             if current == target:
                 df.at[idx, 'lines'] = matches
-                df.at[idx, 'src_lines'] = [ori_content_lines[i] for i in match_indices]
+                if match_indices and max(match_indices) < len(ori_content_lines):
+                    df.at[idx, 'src_lines'] = [ori_content_lines[i] for i in match_indices]
+                else:
+                    df.at[idx, 'src_lines'] = origin_lines_for_row(row, len(matches))
                 last_idx = i + 1
                 break
         else:  # If no match is found
-            rprint(f"[❌ Error] Matching failed at line {idx}:")
+            rprint(f"[yellow]Warning: Matching failed at line {idx}; using task text fallback.[/yellow]")
             rprint(f"Target: '{target}'")
             rprint(f"Current: '{current}'")
-            raise ValueError("Matching failed")
+            df.at[idx, 'lines'] = [safe_text(row['text'])]
+            df.at[idx, 'src_lines'] = origin_lines_for_row(row, 1)
 
     # Save results
     df.to_excel(_8_1_AUDIO_TASK, index=False)

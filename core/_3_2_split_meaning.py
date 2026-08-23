@@ -45,21 +45,99 @@ def find_split_positions(original, modified):
 
     return split_positions
 
-def split_sentence(sentence, num_parts, word_limit=20, index=-1, retry_attempt=0):
+def normalize_split_response(response_data):
+    """Return the split response dict when providers wrap JSON in a list."""
+    if isinstance(response_data, list):
+        merged = {}
+        for item in response_data:
+            if isinstance(item, dict):
+                merged.update(item)
+        if merged:
+            response_data = merged
+        else:
+            return None
+
+    if not isinstance(response_data, dict):
+        return None
+
+    return response_data
+
+def get_split_key(response_data):
+    choice = str(response_data.get("choice", "")).strip()
+    if choice.startswith("split"):
+        return choice
+    if choice:
+        return f"split{choice}"
+
+    for key in ("split", "split1", "split2", "split_1", "split_2"):
+        if key in response_data and "[br]" in str(response_data[key]):
+            return key
+
+    for key, value in response_data.items():
+        if str(key).startswith("split") and "[br]" in str(value):
+            return key
+
+    return None
+
+
+def fallback_split_sentence(sentence, num_parts):
+    """Split locally when the LLM fails to return usable JSON."""
+    text = str(sentence).strip()
+    if num_parts <= 1 or not text:
+        return text
+
+    if " " not in text:
+        chunk_size = max(1, math.ceil(len(text) / num_parts))
+        return "\n".join(
+            text[index:index + chunk_size].strip()
+            for index in range(0, len(text), chunk_size)
+            if text[index:index + chunk_size].strip()
+        )
+
+    words = text.split()
+    chunk_size = max(1, math.ceil(len(words) / num_parts))
+    parts = [
+        " ".join(words[index:index + chunk_size]).strip()
+        for index in range(0, len(words), chunk_size)
+    ]
+    return "\n".join(part for part in parts if part)
+
+
+def split_sentence(sentence, num_parts, word_limit=20, index=-1, retry_attempt=0, attempt_tracker=None):
     """Split a long sentence using GPT and return the result as a string."""
     split_prompt = get_split_prompt(sentence, num_parts, word_limit)
     def valid_split(response_data):
-        choice = response_data["choice"]
-        if f'split{choice}' not in response_data:
+        response_data = normalize_split_response(response_data)
+        if response_data is None:
+            return {"status": "error", "message": "Response must be a JSON object"}
+
+        split_key = get_split_key(response_data)
+        if split_key not in response_data:
             return {"status": "error", "message": "Missing required key: `split`"}
-        if "[br]" not in response_data[f"split{choice}"]:
+        if "[br]" not in response_data[split_key]:
             return {"status": "error", "message": "Split failed, no [br] found"}
         return {"status": "success", "message": "Split completed"}
     
-    response_data = ask_gpt(split_prompt + " " * retry_attempt, resp_type='json', valid_def=valid_split, log_title='split_by_meaning')
-    choice = response_data["choice"]
-    best_split = response_data[f"split{choice}"]
-    split_points = find_split_positions(sentence, best_split)
+    try:
+        response_data = ask_gpt(
+            split_prompt + " " * retry_attempt,
+            resp_type='json',
+            valid_def=valid_split,
+            log_title='split_by_meaning',
+            attempt_tracker=attempt_tracker,
+        )
+        response_data = normalize_split_response(response_data)
+        split_key = get_split_key(response_data)
+        best_split = response_data[split_key]
+        split_points = find_split_positions(sentence, best_split)
+    except Exception as exc:
+        console.print(
+            "[yellow]Warning: LLM sentence split failed after retries. "
+            f"Using local fallback split. Details: {exc}[/yellow]"
+        )
+        best_split = fallback_split_sentence(sentence, num_parts)
+        split_points = []
+
     # split the sentence based on the split points
     for i, split_point in enumerate(split_points):
         if i == 0:

@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from core.utils.timing import finish_run, finish_step, start_run, start_step
+
 
 class StopTask(Exception):
     """Raised when the task is stopped by user."""
@@ -40,6 +42,7 @@ class TaskRunner:
     _stop_event: threading.Event = field(default_factory=threading.Event)
     _thread: threading.Thread | None = None
     _steps: list = field(default_factory=list)
+    _run_id: str | None = None
 
     def __post_init__(self):
         self._pause_event.set()  # not paused initially
@@ -54,7 +57,7 @@ class TaskRunner:
 
     # ------ Control API ------
 
-    def start(self, steps: list[tuple[str, Callable]]):
+    def start(self, steps: list[tuple[str, Callable]], run_label: str | None = None):
         """Start executing steps in a background thread.
 
         Args:
@@ -69,6 +72,7 @@ class TaskRunner:
         self.current_label = ""
         self.error_msg = ""
         self.state = "running"
+        self._run_id = start_run(run_label or "Task")
 
         self._pause_event.set()
         self._stop_event.clear()
@@ -92,6 +96,7 @@ class TaskRunner:
             self._stop_event.set()
             self._pause_event.set()  # unblock if paused so thread can exit
             self.state = "stopped"
+            finish_run(self._run_id, status="stopped")
 
     def reset(self):
         """Reset to idle state (only when not running)."""
@@ -102,6 +107,7 @@ class TaskRunner:
             self.current_label = ""
             self.error_msg = ""
             self._steps = []
+            self._run_id = None
 
     @property
     def is_active(self) -> bool:
@@ -139,12 +145,21 @@ class TaskRunner:
 
                 self.current_step = i
                 self.current_label = label
-                func()
+                step_id = start_step(label, run_id=self._run_id)
+                try:
+                    func()
+                except Exception as e:
+                    finish_step(step_id, status="error", error=str(e))
+                    raise
+                else:
+                    finish_step(step_id)
 
             self.state = "completed"
+            finish_run(self._run_id)
         except Exception as e:
             self.error_msg = str(e)
             self.state = "error"
+            finish_run(self._run_id, status="error", error=str(e))
             log_dir = Path("output/log")
             log_dir.mkdir(parents=True, exist_ok=True)
             with open(log_dir / "task_runner_error.log", "a", encoding="utf-8") as f:

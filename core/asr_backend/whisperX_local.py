@@ -34,6 +34,48 @@ from rich import print as rprint
 from core.utils import *
 MODEL_DIR = load_key("model_dir")
 
+
+def _optional_key(key, default):
+    try:
+        return load_key(key)
+    except KeyError:
+        return default
+
+
+def _segment_overlap_ratio(candidate, existing_segments):
+    """Return how much of candidate's duration is covered by existing output."""
+    start = float(candidate.get("start", 0))
+    end = float(candidate.get("end", start))
+    duration = max(end - start, 0.001)
+    overlap = 0.0
+    for segment in existing_segments:
+        other_start = float(segment.get("start", 0))
+        other_end = float(segment.get("end", other_start))
+        overlap += max(0.0, min(end, other_end) - max(start, other_start))
+    return min(overlap / duration, 1.0)
+
+
+def _merge_recovery_segments(primary_segments, recovery_segments, max_overlap_ratio):
+    """Add only genuinely uncovered recovery segments and keep time order."""
+    merged = list(primary_segments)
+    known_text = {
+        " ".join(str(segment.get("text", "")).lower().split())
+        for segment in primary_segments
+        if str(segment.get("text", "")).strip()
+    }
+    added = []
+    for segment in recovery_segments:
+        text = " ".join(str(segment.get("text", "")).lower().split())
+        if not text or text in known_text:
+            continue
+        if _segment_overlap_ratio(segment, primary_segments) > max_overlap_ratio:
+            continue
+        merged.append(segment)
+        added.append(segment)
+        known_text.add(text)
+    merged.sort(key=lambda item: (float(item.get("start", 0)), float(item.get("end", 0))))
+    return merged, added
+
 @except_handler("failed to check hf mirror", default_return=None)
 def check_hf_mirror():
     mirrors = {'Official': 'huggingface.co', 'Mirror': 'hf-mirror.com'}
@@ -89,8 +131,16 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     else:
         rprint(f"[green]📥 Using WHISPER model from HuggingFace:[/green] {model_name} ...")
 
-    vad_options = {"vad_onset": 0.500,"vad_offset": 0.363}
-    asr_options = {"temperatures": [0],"initial_prompt": "",}
+    vad_options = {
+        "vad_onset": float(_optional_key("whisper.vad_onset", 0.35)),
+        "vad_offset": float(_optional_key("whisper.vad_offset", 0.25)),
+    }
+    asr_options = {
+        "temperatures": list(_optional_key(
+            "whisper.temperatures", [0, 0.2, 0.4, 0.6, 0.8, 1.0]
+        )),
+        "initial_prompt": "",
+    }
     whisper_language = None if 'auto' in WHISPER_LANGUAGE else WHISPER_LANGUAGE
     rprint("[bold yellow] You can ignore warning of `Model was trained with torch 1.10.0+cu102, yours is 2.0.0+cu118...`[/bold yellow]")
     model = whisperx.load_model(model_name, device, compute_type=compute_type, language=whisper_language, vad_options=vad_options, asr_options=asr_options, download_root=MODEL_DIR)
@@ -118,6 +168,42 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     # Free GPU resources
     del model
     torch.cuda.empty_cache()
+
+    # A second pass with a more sensitive VAD can recover quiet speech that
+    # the primary pass omitted. Only uncovered segments are merged, so the
+    # second pass does not replace or duplicate successful primary output.
+    if _optional_key("whisper.recovery_enabled", True):
+        recovery_vad_options = {
+            "vad_onset": float(_optional_key("whisper.recovery_vad_onset", 0.20)),
+            "vad_offset": float(_optional_key("whisper.recovery_vad_offset", 0.15)),
+        }
+        rprint(
+            "[cyan]🔎 Running sensitive WhisperX recovery pass "
+            f"(VAD {recovery_vad_options['vad_onset']}/{recovery_vad_options['vad_offset']})...[/cyan]"
+        )
+        recovery_model = whisperx.load_model(
+            model_name,
+            device,
+            compute_type=compute_type,
+            language=whisper_language,
+            vad_options=recovery_vad_options,
+            asr_options=asr_options,
+            download_root=MODEL_DIR,
+        )
+        recovery_result = recovery_model.transcribe(
+            vocal_audio_segment,
+            batch_size=batch_size,
+            print_progress=True,
+        )
+        del recovery_model
+        torch.cuda.empty_cache()
+        max_overlap_ratio = float(
+            _optional_key("whisper.recovery_max_overlap_ratio", 0.25)
+        )
+        result["segments"], recovered = _merge_recovery_segments(
+            result["segments"], recovery_result["segments"], max_overlap_ratio
+        )
+        rprint(f"[green]🔎 Recovery pass added {len(recovered)} missing segment(s).[/green]")
 
     # Save language
     update_key("whisper.language", result['language'])

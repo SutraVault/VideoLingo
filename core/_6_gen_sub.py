@@ -39,6 +39,11 @@ def remove_punctuation(text):
     text = re.sub(r'[^\w\s]', '', text)
     return text.strip()
 
+def safe_text(value):
+    if pd.isna(value):
+        return ''
+    return str(value)
+
 def show_difference(str1, str2):
     """Show the difference positions between two strings"""
     min_len = min(len(str1), len(str2))
@@ -82,7 +87,7 @@ def fuzzy_find_sentence(full_words_str, clean_sentence, current_pos):
 
     return best_match if best_match and best_score >= 0.78 else None
 
-def get_sentence_timestamps(df_words, df_sentences):
+def get_sentence_timestamps(df_words, df_sentences, fallback_timestamps=None):
     time_stamp_list = []
     
     # Build complete string and position mapping
@@ -90,15 +95,21 @@ def get_sentence_timestamps(df_words, df_sentences):
     position_to_word_idx = {}
     
     for idx, word in enumerate(df_words['text']):
-        clean_word = remove_punctuation(word.lower())
+        clean_word = remove_punctuation(safe_text(word).lower())
         start_pos = len(full_words_str)
         full_words_str += clean_word
         for pos in range(start_pos, len(full_words_str)):
             position_to_word_idx[pos] = idx
     
     current_pos = 0
+    pending_empty_rows = []
     for idx, sentence in df_sentences['Source'].items():
-        clean_sentence = remove_punctuation(sentence.lower()).replace(" ", "")
+        clean_sentence = remove_punctuation(safe_text(sentence).lower()).replace(" ", "")
+        if not clean_sentence:
+            time_stamp_list.append(None)
+            pending_empty_rows.append(len(time_stamp_list) - 1)
+            continue
+
         sentence_len = len(clean_sentence)
         sentence_start_pos = current_pos
         
@@ -107,11 +118,14 @@ def get_sentence_timestamps(df_words, df_sentences):
             if full_words_str[current_pos:current_pos+sentence_len] == clean_sentence:
                 start_word_idx = position_to_word_idx[current_pos]
                 end_word_idx = position_to_word_idx[current_pos + sentence_len - 1]
-                
-                time_stamp_list.append((
+                timestamp = (
                     float(df_words['start'][start_word_idx]),
                     float(df_words['end'][end_word_idx])
-                ))
+                )
+                if pending_empty_rows:
+                    timestamp = _fill_pending_empty_timestamps(time_stamp_list, pending_empty_rows, timestamp)
+                    pending_empty_rows = []
+                time_stamp_list.append(timestamp)
                 
                 current_pos += sentence_len
                 match_found = True
@@ -129,11 +143,34 @@ def get_sentence_timestamps(df_words, df_sentences):
                     f"Similarity: {score:.3f}\n"
                     f"Matched ASR text: {matched_text}"
                 )
-                time_stamp_list.append((
+                timestamp = (
                     float(df_words['start'][start_word_idx]),
                     float(df_words['end'][end_word_idx])
-                ))
+                )
+                if pending_empty_rows:
+                    timestamp = _fill_pending_empty_timestamps(time_stamp_list, pending_empty_rows, timestamp)
+                    pending_empty_rows = []
+                time_stamp_list.append(timestamp)
                 current_pos = end_pos
+                continue
+
+            fallback = None
+            if fallback_timestamps is not None and idx < len(fallback_timestamps):
+                fallback = fallback_timestamps[idx]
+            if fallback is not None:
+                print(
+                    f"\n⚠️ ASR text missing; using the reviewed timestamp for sentence: {sentence}\n"
+                    f"Timestamp: {fallback[0]:.3f}s --> {fallback[1]:.3f}s"
+                )
+                if pending_empty_rows:
+                    fallback = _fill_pending_empty_timestamps(
+                        time_stamp_list, pending_empty_rows, fallback
+                    )
+                    pending_empty_rows = []
+                time_stamp_list.append(fallback)
+                # The failed exact-search loop advances to the end of the ASR text.
+                # Restore the cursor so the next spoken sentence can still match.
+                current_pos = sentence_start_pos
                 continue
 
             print(f"\n⚠️ Warning: No exact match found for sentence: {sentence}")
@@ -141,10 +178,34 @@ def get_sentence_timestamps(df_words, df_sentences):
                           full_words_str[current_pos:current_pos+len(clean_sentence)])
             print("\nOriginal sentence:", df_sentences['Source'][idx])
             raise ValueError("❎ No match found for sentence.")
+
+    if pending_empty_rows:
+        fallback = next((item for item in reversed(time_stamp_list) if item), (0.0, 0.01))
+        _fill_pending_empty_timestamps(time_stamp_list, pending_empty_rows, fallback)
     
     return time_stamp_list
 
-def align_timestamp(df_text, df_translate, subtitle_output_configs: list, output_dir: str, for_display: bool = True):
+def _fill_pending_empty_timestamps(time_stamp_list, pending_empty_rows, next_timestamp):
+    start, end = next_timestamp
+    total_parts = len(pending_empty_rows) + 1
+    duration = max(end - start, 0.01)
+    step = duration / total_parts
+
+    for offset, row_index in enumerate(pending_empty_rows):
+        part_start = start + step * offset
+        part_end = start + step * (offset + 1)
+        time_stamp_list[row_index] = (part_start, part_end)
+
+    return (start + step * len(pending_empty_rows), end)
+
+def align_timestamp(
+    df_text,
+    df_translate,
+    subtitle_output_configs: list,
+    output_dir: str,
+    for_display: bool = True,
+    fallback_timestamps=None,
+):
     """Align timestamps and add a new timestamp column to df_translate"""
     df_trans_time = df_translate.copy()
 
@@ -154,7 +215,9 @@ def align_timestamp(df_text, df_translate, subtitle_output_configs: list, output
     words['id'] = words['id'].astype(int)
 
     # Process timestamps ⏰
-    time_stamp_list = get_sentence_timestamps(df_text, df_translate)
+    time_stamp_list = get_sentence_timestamps(
+        df_text, df_translate, fallback_timestamps=fallback_timestamps
+    )
     df_trans_time['timestamp'] = time_stamp_list
     df_trans_time['duration'] = df_trans_time['timestamp'].apply(lambda x: x[1] - x[0])
 
@@ -169,11 +232,11 @@ def align_timestamp(df_text, df_translate, subtitle_output_configs: list, output
 
     # Polish subtitles: replace punctuation in Translation if for_display
     if for_display:
-        df_trans_time['Translation'] = df_trans_time['Translation'].apply(lambda x: re.sub(r'[，。]', ' ', x).strip())
+        df_trans_time['Translation'] = df_trans_time['Translation'].apply(lambda x: re.sub(r'[，。]', ' ', safe_text(x)).strip())
 
     # Output subtitles 📜
     def generate_subtitle_string(df, columns):
-        return ''.join([f"{i+1}\n{row['timestamp']}\n{row[columns[0]].strip()}\n{row[columns[1]].strip() if len(columns) > 1 else ''}\n\n" for i, row in df.iterrows()]).strip()
+        return ''.join([f"{i+1}\n{row['timestamp']}\n{safe_text(row[columns[0]]).strip()}\n{safe_text(row[columns[1]]).strip() if len(columns) > 1 else ''}\n\n" for i, row in df.iterrows()]).strip()
 
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
@@ -191,20 +254,98 @@ def clean_translation(x):
     cleaned = str(x).strip('。').strip('，')
     return autocorrect.format(cleaned)
 
+def _parse_srt_timestamp(value):
+    """Return an SRT timestamp cell as a pair of seconds."""
+    if pd.isna(value):
+        return None
+    match = re.fullmatch(
+        r'\s*(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*'
+        r'(\d+):(\d+):(\d+)[,.](\d+)\s*',
+        str(value),
+    )
+    if not match:
+        return None
+    values = [int(item) for item in match.groups()]
+    start = values[0] * 3600 + values[1] * 60 + values[2] + values[3] / 1000
+    end = values[4] * 3600 + values[5] * 60 + values[6] + values[7] / 1000
+    return (start, end) if end > start else None
+
+def build_reviewed_timestamp_fallback(df_sentences, df_reviewed):
+    """Map split subtitle rows back to reviewed rows and divide their time ranges."""
+    if 'timestamp' not in df_reviewed.columns:
+        return [None] * len(df_sentences)
+
+    fallbacks = [None] * len(df_sentences)
+    split_row = 0
+    for _, reviewed_row in df_reviewed.iterrows():
+        reviewed_source = remove_punctuation(
+            safe_text(reviewed_row.get('Source')).lower()
+        ).replace(' ', '')
+        if not reviewed_source:
+            continue
+
+        group = []
+        combined = ''
+        while split_row < len(df_sentences) and len(combined) < len(reviewed_source):
+            part = remove_punctuation(
+                safe_text(df_sentences.iloc[split_row]['Source']).lower()
+            ).replace(' ', '')
+            group.append((split_row, max(len(part), 1)))
+            combined += part
+            split_row += 1
+
+        # Only attach a reviewed time when the split rows reconstruct the source.
+        # This prevents a timestamp from being assigned to an unrelated later row.
+        if combined != reviewed_source:
+            continue
+        timestamp = _parse_srt_timestamp(reviewed_row.get('timestamp'))
+        if timestamp is None:
+            continue
+
+        start, end = timestamp
+        total_weight = sum(weight for _, weight in group)
+        elapsed_weight = 0
+        for row_index, weight in group:
+            part_start = start + (end - start) * elapsed_weight / total_weight
+            elapsed_weight += weight
+            part_end = start + (end - start) * elapsed_weight / total_weight
+            fallbacks[row_index] = (part_start, part_end)
+
+    return fallbacks
+
 def align_timestamp_main():
     df_text = pd.read_excel(_2_CLEANED_CHUNKS)
-    df_text['text'] = df_text['text'].str.strip('"').str.strip()
+    df_text['text'] = df_text['text'].apply(lambda x: safe_text(x).strip('"').strip())
     df_translate = pd.read_excel(_5_SPLIT_SUB)
+    df_translate['Source'] = df_translate['Source'].apply(safe_text)
     df_translate['Translation'] = df_translate['Translation'].apply(clean_translation)
-    
-    align_timestamp(df_text, df_translate, SUBTITLE_OUTPUT_CONFIGS, _OUTPUT_DIR)
+    df_reviewed = pd.read_excel(_4_2_TRANSLATION)
+    fallback_timestamps = build_reviewed_timestamp_fallback(df_translate, df_reviewed)
+
+    align_timestamp(
+        df_text,
+        df_translate,
+        SUBTITLE_OUTPUT_CONFIGS,
+        _OUTPUT_DIR,
+        fallback_timestamps=fallback_timestamps,
+    )
     console.print(Panel("[bold green]🎉📝 Subtitles generation completed! Please check in the `output` folder 👀[/bold green]"))
 
     # for audio
     df_translate_for_audio = pd.read_excel(_5_REMERGED) # use remerged file to avoid unmatched lines when dubbing
+    df_translate_for_audio['Source'] = df_translate_for_audio['Source'].apply(safe_text)
     df_translate_for_audio['Translation'] = df_translate_for_audio['Translation'].apply(clean_translation)
     
-    align_timestamp(df_text, df_translate_for_audio, AUDIO_SUBTITLE_OUTPUT_CONFIGS, _AUDIO_DIR)
+    audio_fallback_timestamps = build_reviewed_timestamp_fallback(
+        df_translate_for_audio, df_reviewed
+    )
+    align_timestamp(
+        df_text,
+        df_translate_for_audio,
+        AUDIO_SUBTITLE_OUTPUT_CONFIGS,
+        _AUDIO_DIR,
+        fallback_timestamps=audio_fallback_timestamps,
+    )
     console.print(Panel(f"[bold green]🎉📝 Audio subtitles generation completed! Please check in the `{_AUDIO_DIR}` folder 👀[/bold green]"))
     
 

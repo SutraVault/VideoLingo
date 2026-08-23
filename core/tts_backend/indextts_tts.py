@@ -5,6 +5,7 @@ import socket
 import subprocess
 import sys
 import time
+import wave
 
 import requests
 
@@ -164,13 +165,65 @@ def _ensure_reference_audio(ref_audio_path):
         raise
 
 
+def _wav_duration(path):
+    try:
+        with wave.open(str(path), "rb") as wav_file:
+            frame_rate = wav_file.getframerate()
+            if not frame_rate:
+                return 0.0
+            return wav_file.getnframes() / float(frame_rate)
+    except (wave.Error, OSError):
+        return 0.0
+
+
+def _sort_reference_path(path):
+    try:
+        return (0, int(path.stem))
+    except ValueError:
+        return (1, path.stem)
+
+
+def _shared_reference_audio(settings, current_dir):
+    fallback = current_dir / "output/audio/refers/1.wav"
+    _ensure_reference_audio(fallback)
+
+    refers_dir = fallback.parent
+    min_duration = float(settings.get("min_refer_duration", 0) or 0)
+    max_duration = float(settings.get("max_refer_duration", 0) or 0)
+    candidates = []
+
+    for path in sorted(refers_dir.glob("*.wav"), key=_sort_reference_path):
+        duration = _wav_duration(path)
+        if duration <= 0:
+            continue
+        candidates.append((path, duration))
+        if duration >= min_duration and (max_duration <= 0 or duration <= max_duration):
+            if path != fallback:
+                rprint(
+                    f"[yellow]IndexTTS shared reference {fallback.name} is short "
+                    f"({_wav_duration(fallback):.2f}s); using {path.name} ({duration:.2f}s).[/yellow]"
+                )
+            return path
+
+    if candidates:
+        path, duration = max(candidates, key=lambda item: item[1])
+        if path != fallback:
+            rprint(
+                f"[yellow]No IndexTTS reference met min_refer_duration={min_duration:.1f}s; "
+                f"using longest reference {path.name} ({duration:.2f}s).[/yellow]"
+            )
+        return path
+
+    return fallback
+
+
 def _reference_audio_for(number):
     settings = load_key("indextts")
     refer_mode = int(settings.get("refer_mode", 3))
     current_dir = Path.cwd()
 
     if refer_mode == 2:
-        ref_audio_path = current_dir / "output/audio/refers/1.wav"
+        return _shared_reference_audio(settings, current_dir)
     elif refer_mode == 3:
         ref_audio_path = current_dir / f"output/audio/refers/{number}.wav"
     else:

@@ -1,6 +1,7 @@
 import pandas as pd
 import json
 import concurrent.futures
+import os
 from core.translate_lines import translate_lines
 from core._4_1_summarize import search_things_to_note_in_prompt
 from core._8_1_audio_task import check_len_then_trim
@@ -11,6 +12,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from difflib import SequenceMatcher
 from core.utils.models import *
 console = Console()
+SOURCE_SUBTITLE_PATH = "output/source_subtitle.srt"
 
 # Function to split text into chunks
 def split_chunks_by_chars(chunk_size, max_i): 
@@ -22,14 +24,15 @@ def split_chunks_by_chars(chunk_size, max_i):
     chunk = ''
     sentence_count = 0
     for sentence in sentences:
-        if len(chunk) + len(sentence + '\n') > chunk_size or sentence_count == max_i:
+        if chunk and (len(chunk) + len(sentence + '\n') > chunk_size or sentence_count == max_i):
             chunks.append(chunk.strip())
             chunk = sentence + '\n'
             sentence_count = 1
         else:
             chunk += sentence + '\n'
             sentence_count += 1
-    chunks.append(chunk.strip())
+    if chunk.strip():
+        chunks.append(chunk.strip())
     return chunks
 
 # Get context from surrounding chunks
@@ -39,22 +42,92 @@ def get_after_content(chunks, chunk_index):
     return None if chunk_index == len(chunks) - 1 else chunks[chunk_index + 1].split('\n')[:2] # Get first 2 lines
 
 # 🔍 Translate a single chunk
+def _translate_chunk_with_fallback(chunk, previous_content_prompt, after_content_prompt, theme_prompt, index):
+    try:
+        things_to_note_prompt = search_things_to_note_in_prompt(chunk)
+        return translate_lines(
+            chunk,
+            previous_content_prompt,
+            after_content_prompt,
+            things_to_note_prompt,
+            theme_prompt,
+            index,
+        )
+    except Exception:
+        lines = chunk.split('\n')
+        if len(lines) <= 1:
+            raise
+
+        midpoint = len(lines) // 2
+        console.print(
+            f"[yellow]Translation block {index} failed with {len(lines)} lines. "
+            f"Retrying as {midpoint}+{len(lines) - midpoint} smaller lines.[/yellow]"
+        )
+        left_translation, left_source = _translate_chunk_with_fallback(
+            '\n'.join(lines[:midpoint]),
+            previous_content_prompt,
+            after_content_prompt,
+            theme_prompt,
+            f"{index}.1",
+        )
+        right_translation, right_source = _translate_chunk_with_fallback(
+            '\n'.join(lines[midpoint:]),
+            previous_content_prompt,
+            after_content_prompt,
+            theme_prompt,
+            f"{index}.2",
+        )
+        return f"{left_translation}\n{right_translation}", f"{left_source}\n{right_source}"
+
 def translate_chunk(chunk, chunks, theme_prompt, i):
-    things_to_note_prompt = search_things_to_note_in_prompt(chunk)
     previous_content_prompt = get_previous_content(chunks, i)
     after_content_prompt = get_after_content(chunks, i)
-    translation, english_result = translate_lines(chunk, previous_content_prompt, after_content_prompt, things_to_note_prompt, theme_prompt, i)
+    translation, english_result = _translate_chunk_with_fallback(
+        chunk,
+        previous_content_prompt,
+        after_content_prompt,
+        theme_prompt,
+        i,
+    )
     return i, english_result, translation
 
 # Add similarity calculation function
 def similar(a, b):
     return SequenceMatcher(None, a, b).ratio()
 
+
+def _apply_uploaded_subtitle_timestamps(df_translate):
+    if not (
+        os.path.exists(SOURCE_SUBTITLE_PATH)
+        and os.path.exists(_SOURCE_SUBTITLE_SEGMENTS)
+    ):
+        return None
+
+    df_segments = pd.read_excel(_SOURCE_SUBTITLE_SEGMENTS)
+    if len(df_segments) != len(df_translate):
+        console.print(
+            "[yellow]Uploaded subtitle timing exists, but row counts differ "
+            f"({len(df_segments)} timings vs {len(df_translate)} translations). "
+            "Falling back to timestamp alignment.[/yellow]"
+        )
+        return None
+
+    df_time = df_translate.copy()
+    df_time["timestamp"] = df_segments["timestamp"].tolist()
+    df_time["duration"] = df_segments["duration"].astype(float).tolist()
+    console.print(
+        "[green]Using uploaded SRT blocks as translation rows and timestamps.[/green]"
+    )
+    return df_time
+
 # 🚀 Main function to translate all chunks
 @check_file_exists(_4_2_TRANSLATION)
 def translate_all():
     console.print("[bold green]Start Translating All...[/bold green]")
-    chunks = split_chunks_by_chars(chunk_size=600, max_i=10)
+    chunks = split_chunks_by_chars(
+        chunk_size=load_key("translation_chunk_chars"),
+        max_i=load_key("translation_chunk_lines")
+    )
     with open(_4_1_TERMINOLOGY, 'r', encoding='utf-8') as file:
         theme_prompt = json.load(file).get('theme')
 
@@ -94,12 +167,13 @@ def translate_all():
             
         trans_text.extend(best_match[0][2].split('\n'))
     
-    # Trim long translation text
-    df_text = pd.read_excel(_2_CLEANED_CHUNKS)
-    df_text['text'] = df_text['text'].str.strip('"').str.strip()
     df_translate = pd.DataFrame({'Source': src_text, 'Translation': trans_text})
     subtitle_output_configs = [('trans_subs_for_audio.srt', ['Translation'])]
-    df_time = align_timestamp(df_text, df_translate, subtitle_output_configs, output_dir=None, for_display=False)
+    df_time = _apply_uploaded_subtitle_timestamps(df_translate)
+    if df_time is None:
+        df_text = pd.read_excel(_2_CLEANED_CHUNKS)
+        df_text['text'] = df_text['text'].str.strip('"').str.strip()
+        df_time = align_timestamp(df_text, df_translate, subtitle_output_configs, output_dir=None, for_display=False)
     console.print(df_time)
     # apply check_len_then_trim to df_time['Translation'], only when duration > MIN_TRIM_DURATION.
     df_time['Translation'] = df_time.apply(lambda x: check_len_then_trim(x['Translation'], x['duration']) if x['duration'] > load_key("min_trim_duration") else x['Translation'], axis=1)
