@@ -6,7 +6,44 @@ from rich import box
 from core.utils import *
 console = Console()
 
-def valid_translate_result(result: dict, required_keys: list, required_sub_keys: list):
+def _normalize_item(item, required_sub_keys):
+    if not isinstance(item, dict):
+        return {required_sub_keys[0]: str(item)}
+    normalized = dict(item)
+    for sub_key in required_sub_keys:
+        if sub_key in normalized:
+            continue
+        for alias in ("translation", "translated", "text", "result", "content", "subtitle"):
+            if alias in normalized:
+                normalized[sub_key] = normalized[alias]
+                break
+    return normalized
+
+def normalize_translate_result(result, required_sub_keys: list):
+    if isinstance(result, dict):
+        for wrapper_key in ("translations", "translation", "results", "items", "data"):
+            nested = result.get(wrapper_key)
+            if isinstance(nested, (dict, list)):
+                result = nested
+                break
+
+    normalized = {}
+    if isinstance(result, list):
+        for index, item in enumerate(result, 1):
+            key = str(index)
+            normalized[key] = _normalize_item(item, required_sub_keys)
+        return normalized
+
+    if isinstance(result, dict):
+        for key, item in result.items():
+            normalized_key = str(key).strip()
+            normalized[normalized_key] = _normalize_item(item, required_sub_keys)
+        return normalized
+
+    return {}
+
+def valid_translate_result(result, required_keys: list, required_sub_keys: list):
+    result = normalize_translate_result(result, required_sub_keys)
     # Check for the required key
     if not all(key in result for key in required_keys):
         return {"status": "error", "message": f"Missing required key(s): {', '.join(set(required_keys) - set(result.keys()))}"}
@@ -29,14 +66,18 @@ def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_
         def valid_express(response_data):
             return valid_translate_result(response_data, [str(i) for i in range(1, length+1)], ['free'])
         for retry in range(3):
+            required_sub_keys = ['direct'] if step_name == 'faithfulness' else ['free']
+            validator = valid_faith if step_name == 'faithfulness' else valid_express
             if step_name == 'faithfulness':
-                result = ask_gpt(prompt+retry* " ", resp_type='json', valid_def=valid_faith, log_title=f'translate_{step_name}')
+                result = ask_gpt(prompt+retry* " ", resp_type='json', log_title=f'translate_{step_name}')
             elif step_name == 'expressiveness':
-                result = ask_gpt(prompt+retry* " ", resp_type='json', valid_def=valid_express, log_title=f'translate_{step_name}')
-            if len(lines.split('\n')) == len(result):
+                result = ask_gpt(prompt+retry* " ", resp_type='json', log_title=f'translate_{step_name}')
+            result = normalize_translate_result(result, required_sub_keys)
+            valid_resp = validator(result)
+            if valid_resp['status'] == 'success' and len(lines.split('\n')) == len(result):
                 return result
             if retry != 2:
-                console.print(f'[yellow]⚠️ {step_name.capitalize()} translation of block {index} failed, Retry...[/yellow]')
+                console.print(f"[yellow]⚠️ {step_name.capitalize()} translation of block {index} failed: {valid_resp['message']}. Retry...[/yellow]")
         raise ValueError(f'[red]❌ {step_name.capitalize()} translation of block {index} failed after 3 retries. Please check `output/gpt_log/error.json` for more details.[/red]')
 
     ## Step 1: Faithful to the Original Text
@@ -54,11 +95,11 @@ def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_
     reflect_translate = load_key('reflect_translate')
     if not reflect_translate:
         # If reflect_translate is False or not set, use faithful translation directly
-        translate_result = "\n".join([faith_result[i]["direct"].strip() for i in faith_result])
+        translate_result = "\n".join([faith_result[str(i)]["direct"].strip() for i in range(1, len(source_lines) + 1)])
         
         table = Table(title="Translation Results", show_header=False, box=box.ROUNDED)
         table.add_column("Translations", style="bold")
-        for i, key in enumerate(faith_result):
+        for i, key in enumerate(str(i) for i in range(1, len(source_lines) + 1)):
             table.add_row(f"[cyan]Origin:  {faith_result[key]['origin']}[/cyan]")
             table.add_row(f"[magenta]Direct:  {faith_result[key]['direct']}[/magenta]")
             if i < len(faith_result) - 1:
@@ -73,7 +114,7 @@ def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_
 
     table = Table(title="Translation Results", show_header=False, box=box.ROUNDED)
     table.add_column("Translations", style="bold")
-    for i, key in enumerate(express_result):
+    for i, key in enumerate(str(i) for i in range(1, len(source_lines) + 1)):
         table.add_row(f"[cyan]Origin:  {faith_result[key]['origin']}[/cyan]")
         table.add_row(f"[magenta]Direct:  {faith_result[key]['direct']}[/magenta]")
         table.add_row(f"[green]Free:    {express_result[key]['free']}[/green]")
@@ -82,7 +123,7 @@ def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_
 
     console.print(table)
 
-    translate_result = "\n".join([express_result[i]["free"].replace('\n', ' ').strip() for i in express_result])
+    translate_result = "\n".join([express_result[str(i)]["free"].replace('\n', ' ').strip() for i in range(1, len(source_lines) + 1)])
 
     if len(lines.split('\n')) != len(translate_result.split('\n')):
         console.print(Panel(f'[red]❌ Translation of block {index} failed, Length Mismatch, Please check `output/gpt_log/translate_expressiveness.json`[/red]'))

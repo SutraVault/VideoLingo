@@ -102,8 +102,12 @@ def page_setting():
         update_key("display_language", DISPLAY_LANGUAGES[display_language])
         st.rerun()
 
-    # with st.expander(t("Youtube Settings"), expanded=True):
-    #     config_input(t("Cookies Path"), "youtube.cookies_path")
+    with st.expander(t("Youtube Settings"), expanded=False):
+        config_input(
+            t("Cookies Path"),
+            "youtube.cookies_path",
+            help=t("Path to a Netscape-format cookies.txt exported from your browser for YouTube."),
+        )
 
     with st.expander(t("LLM Configuration"), expanded=True):
         config_input(t("API_KEY"), "api.key", placeholder=t("Enter your API key"))
@@ -119,7 +123,7 @@ def page_setting():
             from streamlit_searchbox import _list_to_options_js, _list_to_options_py
 
             if st.button(
-                t("Fetch Model List"), key="fetch_models", use_container_width=True
+                t("Fetch Model List"), key="fetch_models", width="stretch"
             ):
                 with st.spinner(t("Fetching models...")):
                     models = _fetch_model_list(
@@ -165,7 +169,7 @@ def page_setting():
             if selected and selected != load_key("api.model"):
                 update_key("api.model", selected)
 
-            if st.button("📡 " + t("Check API"), key="api", use_container_width=True):
+            if st.button("📡 " + t("Check API"), key="api", width="stretch"):
                 with st.spinner(t("Check API") + "..."):
                     is_valid = check_api()
                 st.toast(
@@ -289,6 +293,76 @@ def page_setting():
         if pause_after_translate != load_key("pause_after_translate"):
             update_key("pause_after_translate", pause_after_translate)
             st.rerun()
+
+        llm_proofread_enabled = st.toggle(
+            t("LLM Proofread Translation"),
+            value=load_key("llm_proofread.enabled"),
+            help=t(
+                "After translation_results.xlsx is generated, ask an LLM to proofread it before manual review."
+            ),
+        )
+        if llm_proofread_enabled != load_key("llm_proofread.enabled"):
+            update_key("llm_proofread.enabled", llm_proofread_enabled)
+            st.rerun()
+
+        if llm_proofread_enabled:
+            proofread_modes = {
+                "suggest": t("Suggest only"),
+                "apply": t("Apply automatically"),
+            }
+            proofread_mode = st.selectbox(
+                t("LLM Proofread Mode"),
+                options=list(proofread_modes.keys()),
+                format_func=lambda value: proofread_modes[value],
+                index=list(proofread_modes.keys()).index(load_key("llm_proofread.mode"))
+                if load_key("llm_proofread.mode") in proofread_modes
+                else 0,
+                help=t(
+                    "Suggest only keeps the original Translation column and adds LLM Proofread. Apply automatically replaces Translation."
+                ),
+            )
+            if proofread_mode != load_key("llm_proofread.mode"):
+                update_key("llm_proofread.mode", proofread_mode)
+                st.rerun()
+
+            proofread_chunk_lines = st.number_input(
+                t("LLM Proofread Chunk Lines"),
+                min_value=5,
+                max_value=100,
+                value=int(load_key("llm_proofread.chunk_lines")),
+                step=5,
+                help=t("More lines reduce repeated prompt tokens, but require a stronger model."),
+            )
+            if proofread_chunk_lines != load_key("llm_proofread.chunk_lines"):
+                update_key("llm_proofread.chunk_lines", int(proofread_chunk_lines))
+
+            proofread_override_api = st.toggle(
+                t("Override LLM for Proofread"),
+                value=load_key("llm_proofread.override_api"),
+                help=t(
+                    "Use a separate OpenAI-compatible API for proofreading, such as OpenRouter, while keeping the main LLM settings for translation."
+                ),
+            )
+            if proofread_override_api != load_key("llm_proofread.override_api"):
+                update_key("llm_proofread.override_api", proofread_override_api)
+                st.rerun()
+
+            if proofread_override_api:
+                config_input(t("Proofread API_KEY"), "llm_proofread.api.key")
+                config_input(
+                    t("Proofread BASE_URL"),
+                    "llm_proofread.api.base_url",
+                    help=t("Openai format, will add /v1/chat/completions automatically"),
+                )
+                config_input(t("Proofread MODEL"), "llm_proofread.api.model")
+                proofread_json = st.toggle(
+                    t("Proofread LLM JSON Format Support"),
+                    value=load_key("llm_proofread.api.llm_support_json"),
+                    help=t("Enable if your proofreading LLM supports JSON mode output"),
+                )
+                if proofread_json != load_key("llm_proofread.api.llm_support_json"):
+                    update_key("llm_proofread.api.llm_support_json", proofread_json)
+                    st.rerun()
     with st.expander(t("Dubbing Settings"), expanded=True):
         watermark_enabled = st.toggle(
             t("Enable Text Watermark"),

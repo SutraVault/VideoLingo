@@ -11,10 +11,12 @@ display_language: "zh-CN"
 
 # API settings
 api:
-  key: 'ollama'
-  base_url: 'http://localhost:11434/v1'
-  model: 'qwen2.5-14b-8k:latest'
-  llm_support_json: false
+  key: 'your_openai_compatible_api_key'
+  base_url: 'https://openrouter.ai/api/v1'
+  model: 'qwen/qwen3.5-flash-02-23'
+  llm_support_json: true
+  reasoning:
+    effort: 'none'
 # *Number of LLM multi-threaded accesses, set to 1 if using local LLM
 max_workers: 1
 
@@ -36,6 +38,18 @@ whisper:
   whisperX_302_api_key: 'your_302_api_key'
   # ElevenLabs API key (experimental)
   elevenlabs_api_key: 'your_elevenlabs_api_key'
+  # Local WhisperX speech-detection thresholds. Lower values reduce missed
+  # quiet speech, at the cost of potentially admitting more background audio.
+  vad_onset: 0.35
+  vad_offset: 0.25
+  # Retry decoding at progressively higher temperatures when a block fails.
+  temperatures: [0, 0.2, 0.4, 0.6, 0.8, 1.0]
+  # Run a second, more sensitive pass and add only segments not covered by the
+  # primary pass. This improves recall for quiet speech and speech under music.
+  recovery_enabled: true
+  recovery_vad_onset: 0.20
+  recovery_vad_offset: 0.15
+  recovery_max_overlap_ratio: 0.25
 
 # Whether to burn subtitles into the video
 burn_subtitles: true
@@ -68,11 +82,27 @@ subtitle:
 # *Summary length, set low to 2k if using local LLM
 summary_length: 8000
 
+# *Translation chunk size. Larger chunks reduce repeated prompt tokens and API requests.
+translation_chunk_chars: 1600
+translation_chunk_lines: 12
+
 # *Maximum number of words for the first rough cut, below 18 will cut too finely affecting translation, above 22 is too long and will make subsequent subtitle splitting difficult to align
 max_split_length: 20
 
 # *Whether to reflect the translation result in the original text
-reflect_translate: false
+reflect_translate: true
+
+# LLM proofreading for translation_results.xlsx before manual review
+llm_proofread:
+  enabled: true
+  mode: "suggest" # suggest: add LLM Proofread column; apply: replace Translation
+  chunk_lines: 7
+  override_api: true
+  api:
+    key: 'your_proofread_api_key'
+    base_url: 'https://openrouter.ai/api/v1'
+    model: 'deepseek/deepseek-v4-flash'
+    llm_support_json: true
 
 # *Whether to pause after extracting professional terms and before translation, allowing users to manually adjust the terminology table output\log\terminology.json
 pause_before_translate: false
@@ -142,6 +172,8 @@ indextts:
   model_dir: '../index-tts/checkpoints'
   # 2: use output/audio/refers/1.wav for all lines; 3: use output/audio/refers/{number}.wav
   refer_mode: 2
+  min_refer_duration: 6.0
+  max_refer_duration: 15.0
   fp16: true
   cuda_kernel: true
   show_console: false

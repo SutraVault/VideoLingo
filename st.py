@@ -6,6 +6,7 @@ import streamlit.components.v1 as components
 from core.st_utils.imports_and_utils import *
 from core.st_utils.task_runner import TaskRunner
 from core.utils.srt_import import import_srt_to_cleaned_chunks
+from core.utils.timing import read_timing_log, record_event, reset_timing_log
 from core import *
 
 # SET PATH
@@ -18,9 +19,159 @@ st.set_page_config(page_title="VideoLingo", page_icon="docs/logo.svg")
 SUB_VIDEO = "output/output_sub.mp4"
 DUB_VIDEO = "output/output_dub.mp4"
 TRANSLATION_RESULTS = "output/log/translation_results.xlsx"
+PROOFREAD_TRANSLATION_RESULTS = "output/log/translation_results_proofread.xlsx"
 TRANS_SRT = "output/trans.srt"
 SOURCE_SUBTITLE = "output/source_subtitle.srt"
 CLEANED_CHUNKS = "output/log/cleaned_chunks.xlsx"
+
+
+def _format_duration(seconds):
+    if seconds is None:
+        return ""
+    seconds = max(0, float(seconds))
+    hours, remainder = divmod(int(seconds), 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:d}:{secs:02d}"
+
+
+def _timing_duration(entry, now=None):
+    if entry.get("duration") is not None:
+        return entry["duration"]
+    if entry.get("start") is None:
+        return None
+    return (now or time.time()) - entry["start"]
+
+
+def _record_timing_event_once(label: str, event_type: str, marker=None):
+    data = read_timing_log()
+    for event in data.get("events", []):
+        if event.get("type") == event_type and event.get("marker") == marker:
+            return
+    record_event(label, event_type=event_type, marker=marker)
+
+
+def _start_runner(runner, steps, run_label: str):
+    try:
+        runner.start(steps, run_label=run_label)
+    except TypeError as exc:
+        if "run_label" not in str(exc):
+            raise
+        runner.start(steps)
+
+
+def _find_first_event(events, event_type):
+    return next((event for event in events if event.get("type") == event_type), None)
+
+
+def _find_first_step_after(steps, label, start_timestamp):
+    return next(
+        (
+            step
+            for step in steps
+            if step.get("label") == label and step.get("start", 0) >= start_timestamp
+        ),
+        None,
+    )
+
+
+def _render_timing_report():
+    data = read_timing_log()
+    runs = data.get("runs", [])
+    steps = data.get("steps", [])
+    events = sorted(data.get("events", []), key=lambda item: item.get("timestamp", 0))
+    if not runs and not steps and not events:
+        return
+
+    now = time.time()
+    st.subheader(t("Processing Time"))
+
+    summary_rows = []
+    for run in runs:
+        summary_rows.append(
+            {
+                t("Stage"): run.get("label", ""),
+                t("Status"): run.get("status", ""),
+                t("Duration"): _format_duration(_timing_duration(run, now)),
+                t("Started"): run.get("start_time", ""),
+                t("Finished"): run.get("end_time", "") or t("Running..."),
+            }
+        )
+
+    review_start = _find_first_event(events, "translation_review_started")
+    review_continue = _find_first_event(events, "continue_after_review_clicked")
+    if review_start and review_continue:
+        summary_rows.append(
+            {
+                t("Stage"): t("Manual proofreading pause"),
+                t("Status"): "completed",
+                t("Duration"): _format_duration(
+                    review_continue["timestamp"] - review_start["timestamp"]
+                ),
+                t("Started"): review_start.get("time", ""),
+                t("Finished"): review_continue.get("time", ""),
+            }
+        )
+
+    if review_continue:
+        tts_start = _find_first_step_after(
+            steps, "TTS audio generation", review_continue["timestamp"]
+        )
+        if tts_start:
+            summary_rows.append(
+                {
+                    t("Stage"): t("After review until TTS starts"),
+                    t("Status"): "completed",
+                    t("Duration"): _format_duration(
+                        tts_start["start"] - review_continue["timestamp"]
+                    ),
+                    t("Started"): review_continue.get("time", ""),
+                    t("Finished"): tts_start.get("start_time", ""),
+                }
+            )
+
+    tts_total = sum(
+        _timing_duration(step, now) or 0
+        for step in steps
+        if step.get("label") == "TTS audio generation"
+    )
+    if tts_total:
+        summary_rows.append(
+            {
+                t("Stage"): t("TTS audio generation only"),
+                t("Status"): "",
+                t("Duration"): _format_duration(tts_total),
+                t("Started"): "",
+                t("Finished"): "",
+            }
+        )
+
+    if summary_rows:
+        st.caption(t("Summary"))
+        st.dataframe(summary_rows, width="stretch", hide_index=True)
+
+    detailed_rows = []
+    run_labels = {run.get("id"): run.get("label", "") for run in runs}
+    for step in steps:
+        detailed_rows.append(
+            {
+                t("Stage"): run_labels.get(step.get("run_id"), step.get("category", "")),
+                t("Step"): step.get("label", ""),
+                t("Status"): step.get("status", ""),
+                t("Duration"): _format_duration(_timing_duration(step, now)),
+                t("Started"): step.get("start_time", ""),
+                t("Finished"): step.get("end_time", "") or t("Running..."),
+            }
+        )
+
+    if detailed_rows:
+        st.caption(t("Detailed Steps"))
+        st.dataframe(detailed_rows, width="stretch", hide_index=True)
+
+    if st.button(t("Reset Timing Log"), key="reset_timing_log_button"):
+        reset_timing_log()
+        st.rerun()
 
 
 def _notify_user_handoff(notification_key: str, title: str, message: str, kind: str = "info"):
@@ -111,8 +262,10 @@ def _remove_text_outputs(remove_cleaned_chunks=False):
     files = [
         "output/log/split_by_nlp.txt",
         "output/log/split_by_meaning.txt",
+        "output/log/source_subtitle_segments.xlsx",
         "output/log/terminology.json",
         "output/log/translation_results.xlsx",
+        "output/log/translation_results_proofread.xlsx",
         "output/log/translation_results_for_subtitles.xlsx",
         "output/log/translation_results_remerged.xlsx",
         "output/src.srt",
@@ -167,7 +320,7 @@ def _task_control_panel(runner_key: str):
                 if st.button(
                     f"▶️ {t('Resume')}",
                     key=f"{runner_key}_resume",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     runner.resume()
                     st.rerun()
@@ -175,7 +328,7 @@ def _task_control_panel(runner_key: str):
                 if st.button(
                     f"⏸️ {t('Pause')}",
                     key=f"{runner_key}_pause",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     runner.pause()
                     st.rerun()
@@ -183,7 +336,7 @@ def _task_control_panel(runner_key: str):
             if st.button(
                 f"⏹️ {t('Stop')}",
                 key=f"{runner_key}_stop",
-                use_container_width=True,
+                width="stretch",
                 type="primary",
             ):
                 runner.stop()
@@ -198,7 +351,7 @@ def _task_control_panel(runner_key: str):
 
     elif runner.state == "stopped":
         st.warning(f"⏹️ {t('Task stopped')} {step_text}")
-        if st.button(t("OK"), key=f"{runner_key}_ack_stop", use_container_width=True):
+        if st.button(t("OK"), key=f"{runner_key}_ack_stop", width="stretch"):
             runner.reset()
             st.rerun(scope="app")
 
@@ -215,9 +368,15 @@ def _task_control_panel(runner_key: str):
             kind="error",
         )
         st.error(f"❌ {t('Task error')}: {runner.error_msg}")
-        if st.button(t("OK"), key=f"{runner_key}_ack_error", use_container_width=True):
-            runner.reset()
-            st.rerun(scope="app")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button(t("OK"), key=f"{runner_key}_ack_error", width="stretch"):
+                runner.reset()
+                st.rerun(scope="app")
+        with col2:
+            if st.button(t("Reset Task State"), key=f"{runner_key}_reset_error", width="stretch"):
+                runner.reset()
+                st.rerun(scope="app")
 
 
 # ─── Text processing ───
@@ -236,7 +395,11 @@ def _get_text_steps(merge_subtitles=False, until_translation=False, after_transl
         ),
         (
             t("Summarization and multi-step translation"),
-            lambda: (_4_1_summarize.get_summary(), _4_2_translate.translate_all()),
+            lambda: (
+                _4_1_summarize.get_summary(),
+                _4_2_translate.translate_all(),
+                _4_3_proofread_translation.proofread_translation_if_enabled(),
+            ),
         ),
     ]
 
@@ -323,10 +486,24 @@ def _render_text_steps(runner, merge_subtitles=False):
     for index, label in enumerate(labels):
         if index == 0 and load_key("pause_after_translate") and not translation_ready and not runner.is_active:
             if st.button(t("Generate Translation Draft"), key="text_processing_button"):
-                runner.start(_get_text_steps(until_translation=True))
+                reset_timing_log()
+                record_event(
+                    t("Generate Translation Draft"),
+                    event_type="start_translation_draft_clicked",
+                )
+                _start_runner(
+                    runner,
+                    _get_text_steps(until_translation=True),
+                    t("Subtitle draft to review"),
+                )
                 st.rerun()
 
         if index == 3 and load_key("pause_after_translate") and translation_ready and not subtitles_ready and not runner.is_active:
+            _record_timing_event_once(
+                t("Translation draft ready"),
+                event_type="translation_review_started",
+                marker=os.path.getmtime(TRANSLATION_RESULTS),
+            )
             _notify_user_handoff(
                 f"translation_draft_{os.path.getmtime(TRANSLATION_RESULTS)}",
                 "VideoLingo",
@@ -339,25 +516,59 @@ def _render_text_steps(runner, merge_subtitles=False):
                     "translation_results.xlsx is ready. Proofread it, then continue the remaining subtitle steps here."
                 )
             )
-            col1, col2 = st.columns(2)
+            if os.path.exists(PROOFREAD_TRANSLATION_RESULTS):
+                st.success(
+                    t(
+                        "LLM proofread workbook is ready at output/log/translation_results_proofread.xlsx."
+                    )
+                )
+            proofread_running = _4_3_proofread_translation.is_proofread_running()
+            if proofread_running:
+                st.info(t("LLM proofreading is running. Please wait."))
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 if st.button(
                     t("Continue After Review"),
                     key="continue_text_processing_button",
+                    disabled=proofread_running,
                 ):
+                    record_event(
+                        t("Continue After Review"),
+                        event_type="continue_after_review_clicked",
+                    )
                     steps = _get_text_steps(
                         merge_subtitles=merge_subtitles,
                         after_translation=True,
                     )
-                    runner.start(steps)
+                    _start_runner(runner, steps, t("Post-review subtitle processing"))
                     st.rerun()
             with col2:
+                if os.path.exists(PROOFREAD_TRANSLATION_RESULTS) and st.button(
+                    t("Apply LLM Proofread"),
+                    key="apply_llm_proofread_button",
+                    disabled=proofread_running,
+                ):
+                    _4_3_proofread_translation.apply_proofread_to_translation()
+                    st.rerun()
+            with col3:
+                if load_key("llm_proofread.enabled") and st.button(
+                    t("Rerun LLM Proofread"),
+                    key="rerun_llm_proofread_button",
+                    disabled=proofread_running,
+                ):
+                    _4_3_proofread_translation.proofread_translation(force=True)
+                    st.rerun()
+            with col4:
                 if st.button(
                     t("Delete Translation Draft"),
                     key="delete_translation_draft_button",
+                    disabled=proofread_running,
                 ):
                     os.remove(TRANSLATION_RESULTS)
+                    if os.path.exists(PROOFREAD_TRANSLATION_RESULTS):
+                        os.remove(PROOFREAD_TRANSLATION_RESULTS)
                     st.rerun()
+            continue
 
         status = _text_step_status(index, label, runner, translation_ready, subtitles_ready)
         _render_step_row(index, label, status)
@@ -409,8 +620,13 @@ def text_processing_section():
                 if st.button(
                     t("Start Processing Subtitles"), key="text_processing_button"
                 ):
+                    reset_timing_log()
+                    record_event(
+                        t("Start Processing Subtitles"),
+                        event_type="start_subtitle_processing_clicked",
+                    )
                     steps = _get_text_steps(merge_subtitles=merge_subtitles)
-                    runner.start(steps)
+                    _start_runner(runner, steps, t("Subtitle processing"))
                     st.rerun()
         else:
             if os.path.exists(SUB_VIDEO):
@@ -540,14 +756,16 @@ def audio_processing_section():
                         "Auto-starting dubbing because subtitle processing is complete."
                     )
                 )
-                runner.start(_get_audio_steps())
+                record_event(t("Start Audio Processing"), event_type="audio_start_clicked")
+                _start_runner(runner, _get_audio_steps(), t("Dubbing"))
                 st.rerun()
             else:
                 if st.button(
                     t("Start Audio Processing"), key="audio_processing_button"
                 ):
+                    record_event(t("Start Audio Processing"), event_type="audio_start_clicked")
                     steps = _get_audio_steps()
-                    runner.start(steps)
+                    _start_runner(runner, steps, t("Dubbing"))
                     st.rerun()
         else:
             st.success(
@@ -589,6 +807,7 @@ def main():
         source_subtitle_section()
         text_processing_section()
         audio_processing_section()
+        _render_timing_report()
 
 
 if __name__ == "__main__":

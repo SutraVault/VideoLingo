@@ -1,4 +1,5 @@
 import os
+import math
 import time
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core.utils import *
 from core.utils.models import *
+from core.utils.timing import timed_step
 from core.asr_backend.audio_preprocess import get_audio_duration
 from core.tts_backend.tts_main import tts_main
 
@@ -20,6 +22,7 @@ console = Console()
 TEMP_FILE_TEMPLATE = f"{_AUDIO_TMP_DIR}/{{}}_temp.wav"
 OUTPUT_FILE_TEMPLATE = f"{_AUDIO_SEGS_DIR}/{{}}.wav"
 WARMUP_SIZE = 5
+MAX_CHUNK_TRUNCATE_OVERFLOW = 1.2
 
 def parse_df_srt_time(time_str: str) -> float:
     """Convert SRT time format to seconds"""
@@ -139,6 +142,35 @@ def process_chunk(chunk_df: pd.DataFrame, accept: float, min_speed: float) -> tu
         
     return round(speed_factor, 3), keep_gaps
 
+def fit_chunk_to_timeline(
+    chunk_df: pd.DataFrame,
+    speed_factor: float,
+    keep_gaps: bool,
+    available_duration: float,
+    accept: float,
+) -> tuple[float, bool]:
+    """Ensure a chunk fits its real timeline, including overlapping subtitles."""
+    # Keep a small margin for ffmpeg duration rounding and codec padding.
+    target_duration = available_duration - 0.1
+    if target_duration <= 0:
+        raise ValueError(f"Invalid chunk timeline duration: {available_duration:.3f}s")
+
+    audio_duration = chunk_df['real_dur'].sum()
+    gap_duration = chunk_df['gap'].iloc[:-1].sum()
+    required_speed = (audio_duration + gap_duration) / target_duration if keep_gaps else audio_duration / target_duration
+
+    # Prefer dropping gaps over forcing speech beyond the accepted speed.
+    speed_without_gaps = audio_duration / target_duration
+    if keep_gaps and required_speed > accept and speed_without_gaps <= accept:
+        keep_gaps = False
+        required_speed = speed_without_gaps
+
+    if required_speed > speed_factor:
+        # Round upward so three-decimal ffmpeg speed values cannot under-fit.
+        speed_factor = math.ceil(required_speed * 1000) / 1000
+
+    return speed_factor, keep_gaps
+
 def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
     """Merge audio chunks and adjust timeline"""
     rprint("[bold blue]🔄 Starting audio chunks processing...[/bold blue]")
@@ -156,6 +188,13 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
             # 🎯 Step1: Start processing new timeline
             chunk_start_time = parse_df_srt_time(chunk_df.iloc[0]['start_time'])
             chunk_end_time = parse_df_srt_time(chunk_df.iloc[-1]['end_time']) + chunk_df.iloc[-1]['tolerance'] # 加上tolerance才是这一块的结束
+            speed_factor, keep_gaps = fit_chunk_to_timeline(
+                chunk_df,
+                speed_factor,
+                keep_gaps,
+                chunk_end_time - chunk_start_time,
+                accept,
+            )
             cur_time = chunk_start_time
             for i, row in chunk_df.iterrows():
                 # If i is not 0, which is not the first row of the chunk, cur_time needs to be added with the gap of the previous row, remember to divide by speed_factor
@@ -181,7 +220,7 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
             # 🔄 Step5: Check if the last row exceeds the range
             if cur_time > chunk_end_time:
                 time_diff = cur_time - chunk_end_time
-                if time_diff <= 0.6:  # If exceeding time is within 0.6 seconds, truncate the last audio
+                if time_diff <= MAX_CHUNK_TRUNCATE_OVERFLOW:
                     rprint(f"[yellow]⚠️ Chunk {chunk_start} to {index} exceeds by {time_diff:.3f}s, truncating last audio[/yellow]")
                     # Get the last audio file
                     last_number = tasks_df.iloc[index]['number']
@@ -193,6 +232,11 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
                     audio = AudioSegment.from_wav(last_file)
                     original_duration = len(audio) / 1000  # Convert to seconds
                     new_duration = original_duration - time_diff
+                    if new_duration <= 0.2:
+                        raise Exception(
+                            f"Chunk {chunk_start} to {index} exceeds by {time_diff:.3f}s, "
+                            f"but truncating would leave only {new_duration:.3f}s of audio"
+                        )
                     trimmed_audio = audio[:(new_duration * 1000)]  # pydub uses milliseconds
                     trimmed_audio.export(last_file, format="wav")
                     
@@ -220,11 +264,13 @@ def gen_audio() -> None:
     rprint("[green]📊 Loaded task file successfully[/green]")
     
     # 🔊 Step3: Generate TTS audio
-    tasks_df = generate_tts_audio(tasks_df)
+    with timed_step("TTS audio generation", category="detail"):
+        tasks_df = generate_tts_audio(tasks_df)
     tasks_df.to_excel(_8_1_AUDIO_TASK, index=False)
     
     # 🔄 Step4: Merge audio chunks
-    tasks_df = merge_chunks(tasks_df)
+    with timed_step("Audio speed adjustment and chunk merge", category="detail"):
+        tasks_df = merge_chunks(tasks_df)
     
     # 💾 Step5: Save results
     tasks_df.to_excel(_8_1_AUDIO_TASK, index=False)

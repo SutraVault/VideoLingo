@@ -70,8 +70,13 @@ def download_video_section():
             if st.button(t("Download Video"), key="download_button", width="stretch"):
                 if url:
                     with st.spinner("Downloading video..."):
-                        download_video_ytdlp(url, resolution=res)
-                    st.rerun()
+                        try:
+                            download_video_ytdlp(url, resolution=res)
+                        except Exception as e:
+                            st.error(str(e))
+                            return False
+                        else:
+                            st.rerun()
 
             uploaded_file = st.file_uploader(t("Or upload video"), type=load_key("allowed_video_formats") + load_key("allowed_audio_formats"))
             if uploaded_file:
