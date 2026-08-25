@@ -417,12 +417,17 @@ def refresh_cached_tts_durations(tasks_df: pd.DataFrame) -> pd.DataFrame:
     return tasks_df
 
 
-def regenerate_oversized_indextts_rows(tasks_df: pd.DataFrame, max_speed: float) -> pd.DataFrame:
+def regenerate_oversized_indextts_rows(
+    tasks_df: pd.DataFrame,
+    max_speed: float,
+    emergency_max_speed: float | None = None,
+) -> pd.DataFrame:
     """Regenerate only cached IndexTTS2.5 rows that cannot fit at max_speed."""
     if load_key("tts_method") != "indextts" or str(load_key("indextts.version")) != "2.5":
         return tasks_df
 
     tasks_df = tasks_df.copy()
+    emergency_max_speed = float(emergency_max_speed or max_speed)
     for index, row in tasks_df.iterrows():
         available = float(row['tol_dur']) - 0.1
         if available <= 0 or float(row['real_dur']) / available <= max_speed:
@@ -479,10 +484,17 @@ def regenerate_oversized_indextts_rows(tasks_df: pd.DataFrame, max_speed: float)
             tasks_df.at[index, 'real_dur'] = after
             tasks_df.at[index, 'silence_removed'] = before - after
             tasks_df.at[index, 'silence_ratio'] = silence_ratio
-        if new_total / available > max_speed:
+        required_speed = new_total / available
+        if max_speed < required_speed <= emergency_max_speed:
+            rprint(
+                f"[yellow]Subtitle {number} requires emergency final fitting at "
+                f"{required_speed:.3f}x (target {max_speed:.3f}x); continuing with a quality warning.[/yellow]"
+            )
+        elif required_speed > emergency_max_speed:
             raise ValueError(
                 f"IndexTTS2.5 subtitle {number} is still too long after targeted regeneration: "
-                f"{new_total / available:.3f}x > {max_speed:.3f}x. Shorten its translation."
+                f"{required_speed:.3f}x > emergency limit {emergency_max_speed:.3f}x. "
+                "Shorten its translation."
             )
     return tasks_df
 
@@ -492,10 +504,16 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
     accept = load_key("speed_factor.accept")
     min_speed = load_key("speed_factor.min")
     max_speed = load_key("speed_factor.max")
+    emergency_ratio = float(load_key("speed_factor.emergency_overflow_ratio"))
+    emergency_max_speed = max_speed * emergency_ratio
     tasks_df = refresh_cached_tts_durations(tasks_df)
-    tasks_df = regenerate_oversized_indextts_rows(tasks_df, max_speed)
+    tasks_df = regenerate_oversized_indextts_rows(
+        tasks_df, max_speed, emergency_max_speed
+    )
     save_audio_tasks(tasks_df)
-    tasks_df = split_oversized_chunks(tasks_df, accept, min_speed, max_speed)
+    tasks_df = split_oversized_chunks(
+        tasks_df, accept, min_speed, emergency_max_speed
+    )
     chunk_start = 0
     
     tasks_df['new_sub_times'] = None
@@ -516,7 +534,7 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
                 keep_gaps,
                 chunk_end_time - chunk_start_time,
                 accept,
-                max_speed,
+                emergency_max_speed,
             )
             cur_time = chunk_start_time
             for i, row in chunk_df.iterrows():
