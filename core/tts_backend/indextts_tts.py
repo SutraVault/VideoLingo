@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import socket
+import statistics
 import subprocess
 import sys
 import time
@@ -16,6 +17,23 @@ from core.utils import *
 
 SERVER_PROCESS = None
 _SHARED_REFERENCE_CACHE = {}
+_DURATION_STATS = {"first_passes": 0, "predicted_first_passes": 0, "corrective_retries": 0}
+_DURATION_CALIBRATION = []
+
+
+def reset_indextts_duration_stats():
+    for key in _DURATION_STATS:
+        _DURATION_STATS[key] = 0
+    _DURATION_CALIBRATION.clear()
+
+
+def get_indextts_duration_stats():
+    stats = dict(_DURATION_STATS)
+    stats["calibration_ratio"] = (
+        round(statistics.median(_DURATION_CALIBRATION), 3)
+        if _DURATION_CALIBRATION else 1.0
+    )
+    return stats
 
 
 def _active_settings():
@@ -311,17 +329,17 @@ def indextts_tts(text, save_path, ref_audio_path, duration_factor=None):
     return True
 
 
-def _line_target_duration(number, save_as, task_df):
-    """Allocate one subtitle's available timeline across its generated lines."""
+def _line_duration_context(number, save_as, task_df):
+    """Return this line's allocated timeline and estimated natural duration."""
     if task_df is None or not hasattr(task_df, "loc"):
-        return None
+        return None, None
     rows = task_df.loc[task_df["number"] == number]
     if rows.empty:
-        return None
+        return None, None
     row = rows.iloc[0]
     available = float(row.get("tol_dur", row.get("duration", 0)) or 0)
     if available <= 0:
-        return None
+        return None, None
 
     lines = row.get("lines", [])
     if isinstance(lines, str):
@@ -330,29 +348,62 @@ def _line_target_duration(number, save_as, task_df):
         except (SyntaxError, ValueError):
             lines = [lines]
     if not isinstance(lines, (list, tuple)) or not lines:
-        return available
+        return available, float(row.get("est_dur", 0) or 0) or None
 
     match = re.search(r"_(\d+)_temp$", Path(save_as).stem)
     line_index = int(match.group(1)) if match else 0
     if line_index >= len(lines):
-        return None
+        return None, None
 
     # Punctuation contributes a small pause but should not dominate allocation.
     weights = [max(1, len(re.sub(r"[\s，。！？、；：,.!?;:]", "", str(line)))) for line in lines]
-    return available * weights[line_index] / sum(weights)
+    weight_ratio = weights[line_index] / sum(weights)
+    estimated_total = float(row.get("est_dur", 0) or 0)
+    estimated_line = estimated_total * weight_ratio if estimated_total > 0 else None
+    return available * weight_ratio, estimated_line
 
 
-def _auto_duration_factor(settings, first_duration, target_duration):
+def _predicted_duration_factor(settings, estimated_duration, target_duration):
+    """Choose a useful first-pass factor from the task duration estimate."""
+    base = float(settings.get("duration_factor", 1.0))
+    auto = settings.get("auto_duration", {}) or {}
+    if not auto.get("enabled", False) or not estimated_duration or not target_duration:
+        return base
+    native_fit_speed = float(auto.get("native_fit_speed", 1.0))
+    target = target_duration * float(auto.get("target_fill_ratio", 0.95)) * native_fit_speed
+    threshold = float(auto.get("overflow_threshold", 0.08))
+    calibration = statistics.median(_DURATION_CALIBRATION) if _DURATION_CALIBRATION else 1.0
+    calibrated_estimate = estimated_duration * calibration
+    if calibrated_estimate <= target * (1 + threshold):
+        return base
+    factor = base * target / calibrated_estimate
+    factor = max(float(auto.get("min_factor", 0.75)), factor)
+    factor = min(float(auto.get("max_factor", base)), factor)
+    return round(factor, 3)
+
+
+def _record_duration_calibration(estimated_duration, factor, actual_duration):
+    """Learn how IndexTTS duration compares with the generic text estimator."""
+    if not estimated_duration or estimated_duration <= 0 or factor <= 0 or actual_duration <= 0:
+        return
+    ratio = actual_duration / factor / estimated_duration
+    # Reject pathological samples while retaining realistic model variation.
+    if 0.5 <= ratio <= 3.5:
+        _DURATION_CALIBRATION.append(ratio)
+        del _DURATION_CALIBRATION[:-20]
+
+
+def _auto_duration_factor(settings, first_duration, target_duration, current_factor=None):
     auto = settings.get("auto_duration", {}) or {}
     if not auto.get("enabled", False) or first_duration <= 0 or not target_duration:
         return None
     fill_ratio = float(auto.get("target_fill_ratio", 0.95))
-    target = target_duration * fill_ratio
+    target = target_duration * fill_ratio * float(auto.get("native_fit_speed", 1.0))
     overflow_threshold = float(auto.get("overflow_threshold", 0.08))
     if first_duration <= target * (1 + overflow_threshold):
         return None
 
-    base = float(settings.get("duration_factor", 1.0))
+    base = float(settings.get("duration_factor", 1.0)) if current_factor is None else float(current_factor)
     factor = base * target / first_duration
     factor = max(float(auto.get("min_factor", 0.75)), factor)
     factor = min(float(auto.get("max_factor", base)), factor)
@@ -366,12 +417,18 @@ def indextts_tts_for_videolingo(text, save_as, number, task_df):
     settings = _active_settings()
     ref_audio_path = _reference_audio_for(number)
     try:
-        result = indextts_tts(text, save_as, ref_audio_path)
+        target_duration, estimated_duration = _line_duration_context(number, save_as, task_df)
+        first_factor = _predicted_duration_factor(settings, estimated_duration, target_duration)
+        _DURATION_STATS["first_passes"] += 1
+        if abs(first_factor - float(settings.get("duration_factor", 1.0))) >= 0.02:
+            _DURATION_STATS["predicted_first_passes"] += 1
+        result = indextts_tts(text, save_as, ref_audio_path, duration_factor=first_factor)
         if settings["version"] == "2.5":
-            target_duration = _line_target_duration(number, save_as, task_df)
             first_duration = _wav_duration(Path(save_as))
-            factor = _auto_duration_factor(settings, first_duration, target_duration)
+            _record_duration_calibration(estimated_duration, first_factor, first_duration)
+            factor = _auto_duration_factor(settings, first_duration, target_duration, first_factor)
             if factor is not None:
+                _DURATION_STATS["corrective_retries"] += 1
                 rprint(
                     f"[cyan]IndexTTS2.5 subtitle {number}: {first_duration:.2f}s exceeds "
                     f"{target_duration:.2f}s allocation; regenerating with duration_factor={factor:.3f}.[/cyan]"

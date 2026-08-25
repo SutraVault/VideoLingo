@@ -213,6 +213,8 @@ indextts:
       overflow_threshold: 0.08
       # Keep a small timing margin for silence cleanup and ffmpeg rounding.
       target_fill_ratio: 0.95
+      # Let the final high-quality speed fit absorb a small residual overflow.
+      native_fit_speed: 1.15
       # Avoid excessive native time compression; post-processing remains a fallback.
       min_factor: 0.75
       # Targeted recovery may go lower for isolated rows that otherwise stop the run.

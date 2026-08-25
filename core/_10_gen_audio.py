@@ -17,7 +17,11 @@ from core.utils.models import *
 from core.utils.timing import timed_step
 from core.asr_backend.audio_preprocess import get_audio_duration
 from core.tts_backend.tts_main import tts_main
-from core.tts_backend.indextts_tts import regenerate_indextts_to_duration
+from core.tts_backend.indextts_tts import (
+    get_indextts_duration_stats,
+    regenerate_indextts_to_duration,
+    reset_indextts_duration_stats,
+)
 
 console = Console()
 
@@ -135,6 +139,8 @@ def generate_tts_audio(tasks_df: pd.DataFrame) -> pd.DataFrame:
     tasks_df['real_dur'] = 0
     tasks_df['silence_removed'] = 0.0
     tasks_df['silence_ratio'] = 0.0
+    if load_key("tts_method") == "indextts":
+        reset_indextts_duration_stats()
     rprint("[bold green]🎯 Starting TTS audio generation...[/bold green]")
     
     with Progress() as progress:
@@ -176,6 +182,15 @@ def generate_tts_audio(tasks_df: pd.DataFrame) -> pd.DataFrame:
                         rprint(f"[red]❌ Error: {str(e)}[/red]")
                         raise e
 
+    if load_key("tts_method") == "indextts":
+        stats = get_indextts_duration_stats()
+        rprint(
+            "[cyan]IndexTTS duration planning: "
+            f"{stats['first_passes']} first passes, "
+            f"{stats['predicted_first_passes']} predicted native factors, "
+            f"{stats['corrective_retries']} corrective retries, "
+            f"estimator calibration {stats['calibration_ratio']:.3f}x.[/cyan]"
+        )
     rprint("[bold green]✨ TTS audio generation completed![/bold green]")
     return tasks_df
 
