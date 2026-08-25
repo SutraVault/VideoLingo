@@ -207,6 +207,8 @@ indextts:
       # As a last resort, collapse only clearly abnormal model-generated pauses.
       min_abnormal_silence_ms: 600
       keep_abnormal_silence_ms: 220
+      # Repeated per-line inference adds redundant leading/trailing padding.
+      keep_edge_silence_ms: 60
   v2_5:
     port: 9872
     repo_dir: '../index-tts-2.5'

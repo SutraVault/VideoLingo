@@ -11,7 +11,7 @@ from typing import Tuple
 
 import pandas as pd
 from pydub import AudioSegment
-from pydub.silence import detect_silence
+from pydub.silence import detect_leading_silence, detect_silence
 from rich.console import Console
 from rich.progress import Progress
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -170,6 +170,24 @@ def clean_abnormal_recovery_silence(
     rebuilt = rebuilt.set_channels(audio.channels).set_sample_width(audio.sample_width)
     rebuilt.export(audio_file, format="wav")
     return original_ms / 1000, len(rebuilt) / 1000, removed_ms / original_ms
+
+
+def trim_recovery_edge_silence(
+    audio_file: str,
+    keep_edge_ms: int,
+) -> tuple[float, float]:
+    """Trim redundant inference padding while retaining a small natural edge."""
+    audio = AudioSegment.from_wav(audio_file)
+    original_ms = len(audio)
+    if original_ms == 0:
+        return 0.0, 0.0
+    leading_ms = detect_leading_silence(audio, silence_threshold=-40, chunk_size=5)
+    trailing_ms = detect_leading_silence(audio.reverse(), silence_threshold=-40, chunk_size=5)
+    trim_start = max(0, leading_ms - keep_edge_ms)
+    trim_end = max(trim_start, original_ms - max(0, trailing_ms - keep_edge_ms))
+    trimmed = audio[trim_start:trim_end]
+    trimmed.export(audio_file, format="wav")
+    return original_ms / 1000, len(trimmed) / 1000
 
 def parse_df_srt_time(time_str: str) -> float:
     """Convert SRT time format to seconds"""
@@ -472,6 +490,7 @@ def regenerate_oversized_indextts2_rows(
     min_estimated_ratio = float(recovery.get("min_estimated_duration_ratio", 0.75))
     min_silence_ms = int(recovery.get("min_abnormal_silence_ms", 600))
     keep_silence_ms = int(recovery.get("keep_abnormal_silence_ms", 220))
+    keep_edge_ms = int(recovery.get("keep_edge_silence_ms", 80))
 
     for index, row in tasks_df.iterrows():
         available = float(row['tol_dur']) - 0.1
@@ -540,6 +559,68 @@ def regenerate_oversized_indextts2_rows(
         new_total = sum(refreshed_durations)
         removed_total = 0.0
         weighted_silence = 0.0
+        if new_total > desired_total and len(lines) > 1:
+            has_cjk = any(re.search(r"[\u3400-\u9fff]", str(line)) for line in lines)
+            separator = "，" if has_cjk else " "
+            combined_line = separator.join(
+                str(line).strip(" ，,.") for line in lines
+            )
+            combined_file = TEMP_FILE_TEMPLATE.format(f"{number}_0")
+            combined_best_file = None
+            combined_best_duration = new_total
+            combined_retry_files = []
+            rprint(
+                f"[yellow]IndexTTS2 subtitle {number} contains {len(lines)} short TTS "
+                "lines; combining them into one inference to remove repeated edge overhead.[/yellow]"
+            )
+            try:
+                for attempt in range(max_retries):
+                    retry_file = str(
+                        Path(combined_file).with_name(
+                            f"{Path(combined_file).stem}_combined_{attempt + 1}.wav"
+                        )
+                    )
+                    combined_retry_files.append(retry_file)
+                    candidate_duration = regenerate_indextts_natural(
+                        combined_line, retry_file, number
+                    )
+                    if candidate_duration < estimated_total * min_estimated_ratio:
+                        rprint(
+                            f"[yellow]Rejected suspiciously short combined IndexTTS2 "
+                            f"candidate for subtitle {number}: {candidate_duration:.3f}s.[/yellow]"
+                        )
+                        continue
+                    if candidate_duration < combined_best_duration:
+                        combined_best_file = retry_file
+                        combined_best_duration = candidate_duration
+                    if combined_best_duration <= desired_total:
+                        break
+                if combined_best_file:
+                    shutil.copy2(combined_best_file, combined_file)
+                    for old_line_index in range(1, len(lines)):
+                        try:
+                            os.remove(TEMP_FILE_TEMPLATE.format(f"{number}_{old_line_index}"))
+                        except FileNotFoundError:
+                            pass
+                    src_lines = row.get('src_lines', [])
+                    if isinstance(src_lines, str):
+                        try:
+                            src_lines = eval(src_lines)
+                        except (SyntaxError, ValueError):
+                            src_lines = [src_lines]
+                    lines = [combined_line]
+                    tasks_df.at[index, 'lines'] = lines
+                    tasks_df.at[index, 'src_lines'] = [
+                        " ".join(str(src_line) for src_line in src_lines)
+                    ]
+                    new_total = combined_best_duration
+            finally:
+                for retry_file in combined_retry_files:
+                    try:
+                        os.remove(retry_file)
+                    except FileNotFoundError:
+                        pass
+
         if new_total > desired_total:
             rprint(
                 f"[yellow]IndexTTS2 subtitle {number} still exceeds the preferred limit; "
@@ -556,6 +637,23 @@ def regenerate_oversized_indextts2_rows(
                 get_audio_duration(TEMP_FILE_TEMPLATE.format(f"{number}_{line_index}"))
                 for line_index in range(len(lines))
             )
+
+        if new_total > desired_total:
+            edge_removed = 0.0
+            for line_index in range(len(lines)):
+                temp_file = TEMP_FILE_TEMPLATE.format(f"{number}_{line_index}")
+                before, after = trim_recovery_edge_silence(temp_file, keep_edge_ms)
+                edge_removed += before - after
+            if edge_removed > 0:
+                removed_total += edge_removed
+                new_total = sum(
+                    get_audio_duration(TEMP_FILE_TEMPLATE.format(f"{number}_{line_index}"))
+                    for line_index in range(len(lines))
+                )
+                rprint(
+                    f"[cyan]IndexTTS2 subtitle {number}: removed {edge_removed:.3f}s "
+                    "of repeated inference edge padding.[/cyan]"
+                )
 
         tasks_df.at[index, 'real_dur'] = new_total
         tasks_df.at[index, 'silence_removed'] = (
