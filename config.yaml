@@ -215,6 +215,8 @@ indextts:
       target_fill_ratio: 0.95
       # Avoid excessive native time compression; post-processing remains a fallback.
       min_factor: 0.75
+      # Targeted recovery may go lower for isolated rows that otherwise stop the run.
+      emergency_min_factor: 0.50
       max_factor: 1.0
     text_normalization: true
     # Qwen emotion understanding consumes additional memory and startup time.

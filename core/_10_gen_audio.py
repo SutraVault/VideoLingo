@@ -17,6 +17,7 @@ from core.utils.models import *
 from core.utils.timing import timed_step
 from core.asr_backend.audio_preprocess import get_audio_duration
 from core.tts_backend.tts_main import tts_main
+from core.tts_backend.indextts_tts import regenerate_indextts_to_duration
 
 console = Console()
 
@@ -313,12 +314,61 @@ def can_reuse_generated_tts(tasks_df: pd.DataFrame) -> bool:
                 return False
     return True
 
+
+def regenerate_oversized_indextts_rows(tasks_df: pd.DataFrame, max_speed: float) -> pd.DataFrame:
+    """Regenerate only cached IndexTTS2.5 rows that cannot fit at max_speed."""
+    if load_key("tts_method") != "indextts" or str(load_key("indextts.version")) != "2.5":
+        return tasks_df
+
+    tasks_df = tasks_df.copy()
+    for index, row in tasks_df.iterrows():
+        available = float(row['tol_dur']) - 0.1
+        if available <= 0 or float(row['real_dur']) / available <= max_speed:
+            continue
+
+        lines = eval(row['lines']) if isinstance(row['lines'], str) else row['lines']
+        number = row['number']
+        current_durations = [
+            get_audio_duration(TEMP_FILE_TEMPLATE.format(f"{number}_{line_index}"))
+            for line_index in range(len(lines))
+        ]
+        total_duration = sum(current_durations)
+        allowed_total = available * max_speed * 0.98
+        rprint(
+            f"[yellow]Subtitle {number} is too long ({total_duration:.3f}s); "
+            "regenerating only this subtitle with stronger native duration control.[/yellow]"
+        )
+
+        new_total = 0.0
+        original_total = 0.0
+        weighted_silence = 0.0
+        for line_index, (line, current_duration) in enumerate(zip(lines, current_durations)):
+            temp_file = TEMP_FILE_TEMPLATE.format(f"{number}_{line_index}")
+            line_allowance = allowed_total * current_duration / total_duration
+            regenerate_indextts_to_duration(line, temp_file, number, line_allowance)
+            before, after, silence_ratio = clean_generated_silence(temp_file)
+            original_total += before
+            new_total += after
+            weighted_silence += silence_ratio * before
+
+        tasks_df.at[index, 'real_dur'] = new_total
+        tasks_df.at[index, 'silence_removed'] = original_total - new_total
+        tasks_df.at[index, 'silence_ratio'] = weighted_silence / original_total if original_total else 0.0
+        if new_total / available > max_speed:
+            raise ValueError(
+                f"IndexTTS2.5 subtitle {number} is still too long after targeted regeneration: "
+                f"{new_total / available:.3f}x > {max_speed:.3f}x. Shorten its translation."
+            )
+    return tasks_df
+
 def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
     """Merge audio chunks and adjust timeline"""
     rprint("[bold blue]🔄 Starting audio chunks processing...[/bold blue]")
     accept = load_key("speed_factor.accept")
     min_speed = load_key("speed_factor.min")
     max_speed = load_key("speed_factor.max")
+    tasks_df = regenerate_oversized_indextts_rows(tasks_df, max_speed)
+    tasks_df.to_excel(_8_1_AUDIO_TASK, index=False)
     tasks_df = split_oversized_chunks(tasks_df, accept, min_speed, max_speed)
     chunk_start = 0
     

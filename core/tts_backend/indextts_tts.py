@@ -377,3 +377,30 @@ def indextts_tts_for_videolingo(text, save_as, number, task_df):
             rprint("[yellow]IndexTTS failed with per-line reference audio; retrying with the first reference audio.[/yellow]")
             return indextts_tts(text, save_as, fallback)
         raise
+
+
+def regenerate_indextts_to_duration(text, save_as, number, max_duration):
+    """Regenerate one cached IndexTTS2.5 line to a bounded native duration."""
+    start_indextts_server()
+    settings = _active_settings()
+    if settings["version"] != "2.5":
+        raise RuntimeError("Targeted duration regeneration requires IndexTTS 2.5")
+
+    ref_audio_path = _reference_audio_for(number)
+    auto = settings.get("auto_duration", {}) or {}
+    factor = float(auto.get("min_factor", 0.75))
+    emergency_min = float(auto.get("emergency_min_factor", 0.5))
+    max_duration = float(max_duration)
+
+    for attempt in range(2):
+        indextts_tts(text, save_as, ref_audio_path, duration_factor=factor)
+        duration = _wav_duration(Path(save_as))
+        if duration <= max_duration:
+            return duration, factor
+        next_factor = factor * max_duration / duration * 0.98
+        next_factor = max(emergency_min, min(factor - 0.02, next_factor))
+        if next_factor >= factor or (factor <= emergency_min and attempt > 0):
+            break
+        factor = round(next_factor, 3)
+
+    return _wav_duration(Path(save_as)), factor
