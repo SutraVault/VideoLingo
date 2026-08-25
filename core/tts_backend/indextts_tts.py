@@ -1,5 +1,7 @@
 from pathlib import Path
+import ast
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -13,6 +15,18 @@ from core.utils import *
 
 
 SERVER_PROCESS = None
+
+
+def _active_settings():
+    """Return shared settings merged with the selected engine profile."""
+    settings = dict(load_key("indextts"))
+    version = str(settings.get("version", "2"))
+    profile_key = "v2_5" if version == "2.5" else "v2"
+    profile = settings.get(profile_key, {}) or {}
+    settings.update(profile)
+    settings["version"] = version
+    settings["profile_key"] = profile_key
+    return settings
 
 
 def _resolve_from_project(path_value):
@@ -30,6 +44,11 @@ def _is_port_open(host, port):
 
 def _build_server_command(settings):
     repo_dir = _resolve_from_project(settings.get("repo_dir", "../index-tts"))
+    is_v25 = settings.get("version") == "2.5"
+    if is_v25:
+        server_script = Path(__file__).resolve().with_name("indextts25_server.py")
+    else:
+        server_script = repo_dir / "indextts_server.py"
     if settings.get("use_uv", True):
         uv_path = settings.get("uv_path", "")
         uv_exe = _resolve_from_project(uv_path) if uv_path else None
@@ -41,7 +60,7 @@ def _build_server_command(settings):
             uv_exe = common_uv if common_uv.exists() else None
         if not uv_exe or not uv_exe.exists():
             raise FileNotFoundError("uv executable not found. Set indextts.uv_path in config.yaml or disable indextts.use_uv.")
-        cmd = [str(uv_exe), "run", "python", "indextts_server.py"]
+        cmd = [str(uv_exe), "run", "python", str(server_script)]
     else:
         python_path = settings.get("python", "")
         if python_path and any(sep in str(python_path) for sep in ("/", "\\")):
@@ -52,7 +71,7 @@ def _build_server_command(settings):
             python_exe = repo_dir / ".venv" / "Scripts" / "python.exe"
         if python_exe.is_absolute() and not python_exe.exists():
             python_exe = Path(sys.executable)
-        cmd = [str(python_exe), "indextts_server.py"]
+        cmd = [str(python_exe), str(server_script)]
 
     model_dir = _resolve_from_project(settings.get("model_dir", str(repo_dir / "checkpoints")))
     cmd.extend([
@@ -64,7 +83,9 @@ def _build_server_command(settings):
         str(model_dir),
     ])
 
-    if settings.get("fp16", False):
+    if is_v25 and settings.get("bf16", False):
+        cmd.append("--bf16")
+    elif settings.get("fp16", False):
         cmd.append("--fp16")
     if settings.get("cuda_kernel", False):
         cmd.append("--cuda_kernel")
@@ -74,34 +95,43 @@ def _build_server_command(settings):
         cmd.append("--accel")
     if settings.get("torch_compile", False):
         cmd.append("--torch_compile")
+    if is_v25 and (settings.get("use_qwen_emo", False) or settings.get("use_emo_text", False)):
+        cmd.append("--use_qwen_emo")
 
     return repo_dir, cmd
 
 
 def start_indextts_server():
     global SERVER_PROCESS
-    settings = load_key("indextts")
+    settings = _active_settings()
     host = str(settings.get("host", "127.0.0.1"))
     port = int(settings.get("port", 9871))
-    api_url = settings.get("api_url", f"http://{host}:{port}/tts")
+    api_url = f"http://{host}:{port}/tts"
     ping_url = api_url.rsplit("/", 1)[0] + "/ping"
 
     if _is_port_open(host, port):
         try:
             response = requests.get(ping_url, timeout=3)
             if response.status_code == 200:
-                return
-        except requests.RequestException:
+                version_matches = settings["version"] != "2.5" or response.json().get("version") == "2.5"
+                if version_matches:
+                    return
+        except (requests.RequestException, ValueError):
             pass
 
     repo_dir, cmd = _build_server_command(settings)
-    if not (repo_dir / "indextts_server.py").exists():
+    if not repo_dir.exists():
+        raise FileNotFoundError(f"IndexTTS {settings['version']} repository not found: {repo_dir}")
+    model_dir = _resolve_from_project(settings.get("model_dir", repo_dir / "checkpoints"))
+    if not (model_dir / "config.yaml").exists():
+        raise FileNotFoundError(f"IndexTTS {settings['version']} model config not found: {model_dir / 'config.yaml'}")
+    if settings["version"] == "2" and not (repo_dir / "indextts_server.py").exists():
         raise FileNotFoundError(f"IndexTTS server file not found: {repo_dir / 'indextts_server.py'}")
 
     rprint("[bold yellow]Initializing IndexTTS server...[/bold yellow]")
     log_dir = Path.cwd() / "output" / "log"
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / "indextts_server.log"
+    log_path = log_dir / f"indextts_{settings['version'].replace('.', '_')}_server.log"
     env = os.environ.copy()
     env.pop("SSL_CERT_DIR", None)
     env.pop("SSL_CERT_FILE", None)
@@ -218,7 +248,7 @@ def _shared_reference_audio(settings, current_dir):
 
 
 def _reference_audio_for(number):
-    settings = load_key("indextts")
+    settings = _active_settings()
     refer_mode = int(settings.get("refer_mode", 3))
     current_dir = Path.cwd()
 
@@ -237,9 +267,9 @@ def _reference_audio_for(number):
     return ref_audio_path
 
 
-def indextts_tts(text, save_path, ref_audio_path):
-    settings = load_key("indextts")
-    api_url = settings.get("api_url", f"http://{settings.get('host', '127.0.0.1')}:{settings.get('port', 9871)}/tts")
+def indextts_tts(text, save_path, ref_audio_path, duration_factor=None):
+    settings = _active_settings()
+    api_url = f"http://{settings.get('host', '127.0.0.1')}:{settings.get('port', 9871)}/tts"
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -251,8 +281,18 @@ def indextts_tts(text, save_path, ref_audio_path):
         "use_emo_text": settings.get("use_emo_text", False),
         "emo_text": settings.get("emo_text") or None,
         "use_random": settings.get("use_random", False),
+        "interval_silence": settings.get("interval_silence", 80),
         "max_text_tokens_per_segment": settings.get("max_text_tokens_per_segment", 120),
     }
+    if settings["version"] == "2.5":
+        payload.update({
+            "lang": settings.get("language", "ZH"),
+            "duration_factor": (
+                settings.get("duration_factor", 1.0)
+                if duration_factor is None else duration_factor
+            ),
+            "text_normalization": settings.get("text_normalization", True),
+        })
     response = requests.post(api_url, json=payload, timeout=int(settings.get("request_timeout", 600)))
     if response.status_code != 200:
         raise RuntimeError(f"IndexTTS request failed: HTTP {response.status_code}, {response.text}")
@@ -263,13 +303,75 @@ def indextts_tts(text, save_path, ref_audio_path):
     return True
 
 
+def _line_target_duration(number, save_as, task_df):
+    """Allocate one subtitle's available timeline across its generated lines."""
+    if task_df is None or not hasattr(task_df, "loc"):
+        return None
+    rows = task_df.loc[task_df["number"] == number]
+    if rows.empty:
+        return None
+    row = rows.iloc[0]
+    available = float(row.get("tol_dur", row.get("duration", 0)) or 0)
+    if available <= 0:
+        return None
+
+    lines = row.get("lines", [])
+    if isinstance(lines, str):
+        try:
+            lines = ast.literal_eval(lines)
+        except (SyntaxError, ValueError):
+            lines = [lines]
+    if not isinstance(lines, (list, tuple)) or not lines:
+        return available
+
+    match = re.search(r"_(\d+)_temp$", Path(save_as).stem)
+    line_index = int(match.group(1)) if match else 0
+    if line_index >= len(lines):
+        return None
+
+    # Punctuation contributes a small pause but should not dominate allocation.
+    weights = [max(1, len(re.sub(r"[\s，。！？、；：,.!?;:]", "", str(line)))) for line in lines]
+    return available * weights[line_index] / sum(weights)
+
+
+def _auto_duration_factor(settings, first_duration, target_duration):
+    auto = settings.get("auto_duration", {}) or {}
+    if not auto.get("enabled", False) or first_duration <= 0 or not target_duration:
+        return None
+    fill_ratio = float(auto.get("target_fill_ratio", 0.95))
+    target = target_duration * fill_ratio
+    overflow_threshold = float(auto.get("overflow_threshold", 0.08))
+    if first_duration <= target * (1 + overflow_threshold):
+        return None
+
+    base = float(settings.get("duration_factor", 1.0))
+    factor = base * target / first_duration
+    factor = max(float(auto.get("min_factor", 0.75)), factor)
+    factor = min(float(auto.get("max_factor", base)), factor)
+    if abs(factor - base) < 0.02:
+        return None
+    return round(factor, 3)
+
+
 def indextts_tts_for_videolingo(text, save_as, number, task_df):
     start_indextts_server()
+    settings = _active_settings()
     ref_audio_path = _reference_audio_for(number)
     try:
-        return indextts_tts(text, save_as, ref_audio_path)
+        result = indextts_tts(text, save_as, ref_audio_path)
+        if settings["version"] == "2.5":
+            target_duration = _line_target_duration(number, save_as, task_df)
+            first_duration = _wav_duration(Path(save_as))
+            factor = _auto_duration_factor(settings, first_duration, target_duration)
+            if factor is not None:
+                rprint(
+                    f"[cyan]IndexTTS2.5 subtitle {number}: {first_duration:.2f}s exceeds "
+                    f"{target_duration:.2f}s allocation; regenerating with duration_factor={factor:.3f}.[/cyan]"
+                )
+                result = indextts_tts(text, save_as, ref_audio_path, duration_factor=factor)
+        return result
     except Exception:
-        if int(load_key("indextts.refer_mode")) == 3:
+        if int(_active_settings().get("refer_mode", 2)) == 3:
             fallback = Path.cwd() / "output/audio/refers/1.wav"
             _ensure_reference_audio(fallback)
             rprint("[yellow]IndexTTS failed with per-line reference audio; retrying with the first reference audio.[/yellow]")

@@ -187,19 +187,42 @@ gpt_sovits:
 
 # Local IndexTTS2 clone
 indextts:
+  # Select the local engine used by the "indextts" TTS method: "2" or "2.5".
+  version: '2.5'
   host: '127.0.0.1'
-  port: 9871
-  api_url: 'http://127.0.0.1:9871/tts'
-  repo_dir: '../index-tts'
   use_uv: true
   uv_path: 'C:/Users/micro/miniconda3/Scripts/uv.exe'
-  python: '../index-tts/.venv/Scripts/python.exe'
-  model_dir: '../index-tts/checkpoints'
+  v2:
+    port: 9871
+    repo_dir: '../index-tts'
+    python: '../index-tts/.venv/Scripts/python.exe'
+    model_dir: '../index-tts/checkpoints'
+    fp16: true
+  v2_5:
+    port: 9872
+    repo_dir: '../index-tts-2.5'
+    python: '../index-tts-2.5/.venv/Scripts/python.exe'
+    model_dir: '../index-tts-2.5/checkpoints'
+    bf16: true
+    language: 'ZH'
+    # Baseline value used for the first pass.
+    duration_factor: 1.0
+    auto_duration:
+      enabled: true
+      # Regenerate only when the first pass exceeds the allocated time by 8%.
+      overflow_threshold: 0.08
+      # Keep a small timing margin for silence cleanup and ffmpeg rounding.
+      target_fill_ratio: 0.95
+      # Avoid excessive native time compression; post-processing remains a fallback.
+      min_factor: 0.75
+      max_factor: 1.0
+    text_normalization: true
+    # Qwen emotion understanding consumes additional memory and startup time.
+    use_qwen_emo: false
   # 2: use output/audio/refers/1.wav for all lines; 3: use output/audio/refers/{number}.wav
   refer_mode: 2
   min_refer_duration: 6.0
   max_refer_duration: 15.0
-  fp16: true
   cuda_kernel: true
   show_console: false
   deepspeed: false
@@ -209,7 +232,16 @@ indextts:
   emo_text: ''
   emo_alpha: 0.6
   use_random: false
+  # Silence inserted by IndexTTS between its internal text segments.
+  interval_silence: 80
   max_text_tokens_per_segment: 120
+  # Remove excessive model-generated pauses before timeline speed fitting.
+  silence_cleanup:
+    enabled: true
+    silence_threshold_dbfs: -45
+    min_internal_silence_ms: 350
+    keep_internal_silence_ms: 180
+    keep_edge_silence_ms: 120
   startup_timeout: 300
   request_timeout: 600
 
@@ -220,7 +252,7 @@ f5tts:
 speed_factor:
   min: 1
   accept: 1.2 # Maximum acceptable speed
-  max: 1.4
+  max: 1.45
 
 # *Merge audio configuration
 min_subtitle_duration: 2.5 # Minimum subtitle duration, will be forcibly extended

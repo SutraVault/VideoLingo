@@ -600,9 +600,24 @@ def page_setting():
                 st.rerun()
 
         elif select_tts == "indextts":
-            st.info("Use local IndexTTS2 with VideoLingo reference audio")
-            config_input("IndexTTS Repo Dir", "indextts.repo_dir")
-            config_input("IndexTTS Model Dir", "indextts.model_dir")
+            version_labels = {"2": "IndexTTS2", "2.5": "IndexTTS2.5"}
+            current_version = str(load_key("indextts.version"))
+            selected_version = st.selectbox(
+                "IndexTTS Version",
+                options=list(version_labels.keys()),
+                format_func=lambda value: version_labels[value],
+                index=list(version_labels.keys()).index(current_version)
+                if current_version in version_labels else 0,
+                help="The two versions use separate repositories, model folders, and HTTP ports.",
+            )
+            if selected_version != current_version:
+                update_key("indextts.version", selected_version)
+                st.rerun()
+
+            profile = "v2_5" if selected_version == "2.5" else "v2"
+            st.info(f"Use local {version_labels[selected_version]} with VideoLingo reference audio")
+            config_input("IndexTTS Repo Dir", f"indextts.{profile}.repo_dir")
+            config_input("IndexTTS Model Dir", f"indextts.{profile}.model_dir")
 
             use_uv = st.checkbox("Launch with uv", value=load_key("indextts.use_uv"))
             if use_uv != load_key("indextts.use_uv"):
@@ -611,7 +626,7 @@ def page_setting():
             if use_uv:
                 config_input("uv Path", "indextts.uv_path")
             else:
-                config_input("IndexTTS Python", "indextts.python")
+                config_input("IndexTTS Python", f"indextts.{profile}.python")
 
             refer_mode_options = {
                 2: t("Mode 2: Use first audio from video as reference"),
@@ -630,10 +645,67 @@ def page_setting():
                 update_key("indextts.refer_mode", selected_refer_mode)
                 st.rerun()
 
-            use_fp16 = st.checkbox("FP16", value=load_key("indextts.fp16"))
-            if use_fp16 != load_key("indextts.fp16"):
-                update_key("indextts.fp16", use_fp16)
-                st.rerun()
+            if selected_version == "2.5":
+                use_bf16 = st.checkbox("BF16", value=load_key("indextts.v2_5.bf16"))
+                if use_bf16 != load_key("indextts.v2_5.bf16"):
+                    update_key("indextts.v2_5.bf16", use_bf16)
+                    st.rerun()
+
+                languages = ["ZH", "EN", "JA", "AR", "ES"]
+                current_language = str(load_key("indextts.v2_5.language"))
+                language = st.selectbox(
+                    "IndexTTS Language",
+                    options=languages,
+                    index=languages.index(current_language) if current_language in languages else 0,
+                )
+                if language != current_language:
+                    update_key("indextts.v2_5.language", language)
+                    st.rerun()
+
+                duration_factor = st.slider(
+                    "Native duration factor",
+                    min_value=0.5,
+                    max_value=2.0,
+                    value=float(load_key("indextts.v2_5.duration_factor")),
+                    step=0.05,
+                    help="Below 1.0 speaks faster; above 1.0 speaks slower. Keep 1.0 unless tuning is needed.",
+                )
+                if duration_factor != load_key("indextts.v2_5.duration_factor"):
+                    update_key("indextts.v2_5.duration_factor", duration_factor)
+
+                auto_duration = st.checkbox(
+                    "Auto-fit native duration",
+                    value=load_key("indextts.v2_5.auto_duration.enabled"),
+                    help="Regenerates only lines that exceed their timeline using IndexTTS2.5 native duration control.",
+                )
+                if auto_duration != load_key("indextts.v2_5.auto_duration.enabled"):
+                    update_key("indextts.v2_5.auto_duration.enabled", auto_duration)
+                    st.rerun()
+                if auto_duration:
+                    min_duration_factor = st.slider(
+                        "Minimum auto duration factor",
+                        min_value=0.5,
+                        max_value=1.0,
+                        value=float(load_key("indextts.v2_5.auto_duration.min_factor")),
+                        step=0.05,
+                        help="Lower values allow stronger native compression; 0.75 is the safer default.",
+                    )
+                    if min_duration_factor != load_key("indextts.v2_5.auto_duration.min_factor"):
+                        update_key("indextts.v2_5.auto_duration.min_factor", min_duration_factor)
+
+                use_qwen_emo = st.checkbox(
+                    "Load Qwen emotion model",
+                    value=load_key("indextts.v2_5.use_qwen_emo"),
+                    help="Uses additional VRAM and increases first startup time.",
+                )
+                if use_qwen_emo != load_key("indextts.v2_5.use_qwen_emo"):
+                    update_key("indextts.v2_5.use_qwen_emo", use_qwen_emo)
+                    st.rerun()
+            else:
+                use_fp16 = st.checkbox("FP16", value=load_key("indextts.v2.fp16"))
+                if use_fp16 != load_key("indextts.v2.fp16"):
+                    update_key("indextts.v2.fp16", use_fp16)
+                    st.rerun()
 
             use_cuda_kernel = st.checkbox("CUDA Kernel", value=load_key("indextts.cuda_kernel"))
             if use_cuda_kernel != load_key("indextts.cuda_kernel"):

@@ -7,6 +7,7 @@ from typing import Tuple
 
 import pandas as pd
 from pydub import AudioSegment
+from pydub.silence import detect_silence
 from rich.console import Console
 from rich.progress import Progress
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,6 +24,52 @@ TEMP_FILE_TEMPLATE = f"{_AUDIO_TMP_DIR}/{{}}_temp.wav"
 OUTPUT_FILE_TEMPLATE = f"{_AUDIO_SEGS_DIR}/{{}}.wav"
 WARMUP_SIZE = 5
 MAX_CHUNK_TRUNCATE_OVERFLOW = 1.2
+
+
+def _silence_cleanup_settings() -> dict:
+    """Return optional post-generation cleanup settings for cloned speech."""
+    if load_key("tts_method") != "indextts":
+        return {"enabled": False}
+    settings = load_key("indextts")
+    return settings.get("silence_cleanup", {"enabled": False})
+
+
+def clean_generated_silence(audio_file: str) -> tuple[float, float, float]:
+    """Trim edge silence and shorten only clearly abnormal internal pauses."""
+    audio = AudioSegment.from_wav(audio_file)
+    original_ms = len(audio)
+    settings = _silence_cleanup_settings()
+    if not settings.get("enabled", False) or original_ms == 0:
+        return original_ms / 1000, original_ms / 1000, 0.0
+
+    threshold = float(settings.get("silence_threshold_dbfs", -38))
+    min_internal_ms = int(settings.get("min_internal_silence_ms", 350))
+    keep_internal_ms = int(settings.get("keep_internal_silence_ms", 180))
+    keep_edge_ms = int(settings.get("keep_edge_silence_ms", 120))
+    ranges = detect_silence(
+        audio,
+        min_silence_len=min_internal_ms,
+        silence_thresh=threshold,
+        seek_step=5,
+    )
+    if not ranges:
+        return original_ms / 1000, original_ms / 1000, 0.0
+
+    total_silence_ms = sum(end - start for start, end in ranges)
+    rebuilt = AudioSegment.empty()
+    cursor = 0
+    last_range = len(ranges) - 1
+    for range_index, (start, end) in enumerate(ranges):
+        rebuilt += audio[cursor:start]
+        is_leading = range_index == 0 and start == 0
+        is_trailing = range_index == last_range and end >= original_ms
+        keep_ms = keep_edge_ms if is_leading or is_trailing else keep_internal_ms
+        rebuilt += AudioSegment.silent(duration=min(keep_ms, end - start), frame_rate=audio.frame_rate)
+        cursor = end
+    rebuilt += audio[cursor:]
+    rebuilt = rebuilt.set_channels(audio.channels).set_sample_width(audio.sample_width)
+    rebuilt.export(audio_file, format="wav")
+    return original_ms / 1000, len(rebuilt) / 1000, total_silence_ms / original_ms
 
 def parse_df_srt_time(time_str: str) -> float:
     """Convert SRT time format to seconds"""
@@ -65,20 +112,28 @@ def adjust_audio_speed(input_file: str, output_file: str, speed_factor: float) -
                 rprint(f"[red]❌ Audio speed adjustment failed, max retries reached ({max_retries})[/red]")
                 raise e
 
-def process_row(row: pd.Series, tasks_df: pd.DataFrame) -> Tuple[int, float]:
+def process_row(row: pd.Series, tasks_df: pd.DataFrame) -> Tuple[int, float, float, float]:
     """Helper function for processing single row data"""
     number = row['number']
     lines = eval(row['lines']) if isinstance(row['lines'], str) else row['lines']
     real_dur = 0
+    original_dur = 0
+    weighted_silence = 0
     for line_index, line in enumerate(lines):
         temp_file = TEMP_FILE_TEMPLATE.format(f"{number}_{line_index}")
         tts_main(line, temp_file, number, tasks_df)
-        real_dur += get_audio_duration(temp_file)
-    return number, real_dur
+        before, after, silence_ratio = clean_generated_silence(temp_file)
+        original_dur += before
+        real_dur += after
+        weighted_silence += silence_ratio * before
+    silence_ratio = weighted_silence / original_dur if original_dur else 0.0
+    return number, real_dur, original_dur - real_dur, silence_ratio
 
 def generate_tts_audio(tasks_df: pd.DataFrame) -> pd.DataFrame:
     """Generate TTS audio sequentially and calculate actual duration"""
     tasks_df['real_dur'] = 0
+    tasks_df['silence_removed'] = 0.0
+    tasks_df['silence_ratio'] = 0.0
     rprint("[bold green]🎯 Starting TTS audio generation...[/bold green]")
     
     with Progress() as progress:
@@ -88,8 +143,10 @@ def generate_tts_audio(tasks_df: pd.DataFrame) -> pd.DataFrame:
         warmup_size = min(WARMUP_SIZE, len(tasks_df))
         for _, row in tasks_df.head(warmup_size).iterrows():
             try:
-                number, real_dur = process_row(row, tasks_df)
+                number, real_dur, silence_removed, silence_ratio = process_row(row, tasks_df)
                 tasks_df.loc[tasks_df['number'] == number, 'real_dur'] = real_dur
+                tasks_df.loc[tasks_df['number'] == number, 'silence_removed'] = silence_removed
+                tasks_df.loc[tasks_df['number'] == number, 'silence_ratio'] = silence_ratio
                 progress.advance(task)
             except Exception as e:
                 rprint(f"[red]❌ Error in warmup: {str(e)}[/red]")
@@ -109,8 +166,10 @@ def generate_tts_audio(tasks_df: pd.DataFrame) -> pd.DataFrame:
                 
                 for future in as_completed(futures):
                     try:
-                        number, real_dur = future.result()
+                        number, real_dur, silence_removed, silence_ratio = future.result()
                         tasks_df.loc[tasks_df['number'] == number, 'real_dur'] = real_dur
+                        tasks_df.loc[tasks_df['number'] == number, 'silence_removed'] = silence_removed
+                        tasks_df.loc[tasks_df['number'] == number, 'silence_ratio'] = silence_ratio
                         progress.advance(task)
                     except Exception as e:
                         rprint(f"[red]❌ Error: {str(e)}[/red]")
@@ -148,6 +207,7 @@ def fit_chunk_to_timeline(
     keep_gaps: bool,
     available_duration: float,
     accept: float,
+    max_speed: float,
 ) -> tuple[float, bool]:
     """Ensure a chunk fits its real timeline, including overlapping subtitles."""
     # Keep a small margin for ffmpeg duration rounding and codec padding.
@@ -169,16 +229,102 @@ def fit_chunk_to_timeline(
         # Round upward so three-decimal ffmpeg speed values cannot under-fit.
         speed_factor = math.ceil(required_speed * 1000) / 1000
 
+    if speed_factor > max_speed:
+        numbers = ", ".join(str(number) for number in chunk_df['number'].tolist())
+        raise ValueError(
+            f"TTS audio for subtitle(s) {numbers} requires {speed_factor:.3f}x speed, "
+            f"above speed_factor.max={max_speed:.3f}. Shorten/re-split the translation "
+            "or regenerate the affected speech instead of forcing low-quality audio."
+        )
+
     return speed_factor, keep_gaps
+
+
+def _required_chunk_speed(chunk_df: pd.DataFrame, accept: float, min_speed: float) -> float:
+    """Calculate final required speed without producing audio files."""
+    speed_factor, keep_gaps = process_chunk(chunk_df.reset_index(drop=True), accept, min_speed)
+    chunk_start_time = parse_df_srt_time(chunk_df.iloc[0]['start_time'])
+    chunk_end_time = (
+        parse_df_srt_time(chunk_df.iloc[-1]['end_time'])
+        + float(chunk_df.iloc[-1]['tolerance'])
+    )
+    target_duration = chunk_end_time - chunk_start_time - 0.1
+    if target_duration <= 0:
+        return float("inf")
+    audio_duration = chunk_df['real_dur'].sum()
+    gap_duration = chunk_df['gap'].iloc[:-1].sum()
+    required_speed = (
+        (audio_duration + gap_duration) / target_duration
+        if keep_gaps else audio_duration / target_duration
+    )
+    speed_without_gaps = audio_duration / target_duration
+    if keep_gaps and required_speed > accept and speed_without_gaps <= accept:
+        required_speed = speed_without_gaps
+    return max(speed_factor, required_speed)
+
+
+def split_oversized_chunks(
+    tasks_df: pd.DataFrame,
+    accept: float,
+    min_speed: float,
+    max_speed: float,
+) -> pd.DataFrame:
+    """Split oversized multi-subtitle chunks at safe subtitle boundaries."""
+    tasks_df = tasks_df.copy()
+    chunk_start = 0
+    original_ends = [
+        index for index, row in tasks_df.iterrows() if int(row['cut_off']) == 1
+    ]
+    if not original_ends or original_ends[-1] != len(tasks_df) - 1:
+        original_ends.append(len(tasks_df) - 1)
+
+    for chunk_end in original_ends:
+        chunk_df = tasks_df.iloc[chunk_start:chunk_end + 1]
+        required_speed = _required_chunk_speed(chunk_df, accept, min_speed)
+        if len(chunk_df) > 1 and required_speed > max_speed:
+            tasks_df.loc[chunk_start:chunk_end, 'cut_off'] = 1
+            numbers = ", ".join(str(number) for number in chunk_df['number'].tolist())
+            rprint(
+                f"[yellow]Chunk containing subtitle(s) {numbers} requires "
+                f"{required_speed:.3f}x; splitting at subtitle boundaries.[/yellow]"
+            )
+        chunk_start = chunk_end + 1
+    return tasks_df
+
+
+def can_reuse_generated_tts(tasks_df: pd.DataFrame) -> bool:
+    """Return True when a failed merge can safely reuse its completed TTS files."""
+    required_columns = {"real_dur", "silence_removed", "silence_ratio"}
+    if not required_columns.issubset(tasks_df.columns):
+        return False
+    if tasks_df.empty or (tasks_df["real_dur"] <= 0).any():
+        return False
+
+    task_mtime = os.path.getmtime(_8_1_AUDIO_TASK)
+    for _, row in tasks_df.iterrows():
+        lines = eval(row['lines']) if isinstance(row['lines'], str) else row['lines']
+        for line_index in range(len(lines)):
+            temp_file = TEMP_FILE_TEMPLATE.format(f"{row['number']}_{line_index}")
+            if not os.path.exists(temp_file):
+                return False
+            # The workbook is saved immediately after TTS completes. A much newer
+            # workbook indicates that its task definitions may have changed.
+            if os.path.getmtime(temp_file) > task_mtime + 5:
+                return False
+    return True
 
 def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
     """Merge audio chunks and adjust timeline"""
     rprint("[bold blue]🔄 Starting audio chunks processing...[/bold blue]")
     accept = load_key("speed_factor.accept")
     min_speed = load_key("speed_factor.min")
+    max_speed = load_key("speed_factor.max")
+    tasks_df = split_oversized_chunks(tasks_df, accept, min_speed, max_speed)
     chunk_start = 0
     
     tasks_df['new_sub_times'] = None
+    tasks_df['speed_factor'] = 0.0
+    tasks_df['quality_warning'] = ''
     
     for index, row in tasks_df.iterrows():
         if row['cut_off'] == 1:
@@ -194,6 +340,7 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
                 keep_gaps,
                 chunk_end_time - chunk_start_time,
                 accept,
+                max_speed,
             )
             cur_time = chunk_start_time
             for i, row in chunk_df.iterrows():
@@ -214,6 +361,11 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
                 # 🔄 Step3: Find corresponding main DataFrame index and update new_sub_times
                 main_df_idx = tasks_df[tasks_df['number'] == row['number']].index[0]
                 tasks_df.at[main_df_idx, 'new_sub_times'] = new_sub_times
+                tasks_df.at[main_df_idx, 'speed_factor'] = speed_factor
+                if speed_factor > accept:
+                    tasks_df.at[main_df_idx, 'quality_warning'] = (
+                        f"accelerated above accepted speed ({speed_factor:.3f}x > {accept:.3f}x)"
+                    )
                 # 🎯 Step4: Choose emoji based on speed_factor and accept comparison
                 emoji = "⚡" if speed_factor <= accept else "⚠️"
                 rprint(f"[cyan]{emoji} Processed chunk {chunk_start} to {index} with speed factor {speed_factor}[/cyan]")
@@ -263,10 +415,13 @@ def gen_audio() -> None:
     tasks_df = pd.read_excel(_8_1_AUDIO_TASK)
     rprint("[green]📊 Loaded task file successfully[/green]")
     
-    # 🔊 Step3: Generate TTS audio
-    with timed_step("TTS audio generation", category="detail"):
-        tasks_df = generate_tts_audio(tasks_df)
-    tasks_df.to_excel(_8_1_AUDIO_TASK, index=False)
+    # 🔊 Step3: Generate TTS audio, or reuse a complete cache after a merge-only failure.
+    if can_reuse_generated_tts(tasks_df):
+        rprint("[bold green]♻️ Reusing completed TTS audio; retrying speed adjustment and merge.[/bold green]")
+    else:
+        with timed_step("TTS audio generation", category="detail"):
+            tasks_df = generate_tts_audio(tasks_df)
+        tasks_df.to_excel(_8_1_AUDIO_TASK, index=False)
     
     # 🔄 Step4: Merge audio chunks
     with timed_step("Audio speed adjustment and chunk merge", category="detail"):
