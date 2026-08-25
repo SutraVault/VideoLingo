@@ -238,6 +238,8 @@ indextts:
   use_random: false
   # Silence inserted by IndexTTS between its internal text segments.
   interval_silence: 80
+  # Read standalone four-digit years digit-wise: 1917 -> 一九一七, while preserving M1918.
+  year_digit_reading: true
   max_text_tokens_per_segment: 120
   # Remove excessive model-generated pauses before timeline speed fitting.
   silence_cleanup:

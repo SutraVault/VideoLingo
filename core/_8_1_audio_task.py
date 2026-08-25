@@ -18,9 +18,27 @@ ESTIMATOR = None
 
 
 def normalize_tts_text(text):
-    """Remove accidental whitespace inside numbers without changing word spacing."""
+    """Repair numeric spacing and make standalone four-digit years read digit-wise."""
     text = str(text or "")
-    return re.sub(r'(?<=\d)\s+(?=\d)', '', text)
+    text = re.sub(r'(?<=\d)\s+(?=\d)', '', text)
+    try:
+        year_digit_reading = bool(load_key("indextts.year_digit_reading"))
+    except KeyError:
+        year_digit_reading = False
+    if not year_digit_reading:
+        return text
+
+    digit_names = str.maketrans("0123456789", "〇一二三四五六七八九")
+
+    def replace_year(match):
+        return match.group(1).translate(digit_names)
+
+    # Exclude model names such as M1918/A1917 and longer numeric identifiers.
+    return re.sub(
+        r'(?<![A-Za-z0-9])((?:1[0-9]|20)[0-9]{2})(?![A-Za-z0-9])',
+        replace_year,
+        text,
+    )
 
 def check_len_then_trim(text, duration):
     global ESTIMATOR
