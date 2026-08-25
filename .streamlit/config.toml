@@ -1,2 +1,5 @@
 [server]
 maxUploadSize = 4096
+# Watchdog's event watcher can compare the C: Python environment with this
+# D: project on Windows and raise "Paths don't have the same drive".
+fileWatcherType = "poll"
