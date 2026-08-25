@@ -239,7 +239,7 @@ indextts:
   max_text_tokens_per_segment: 120
   # Remove excessive model-generated pauses before timeline speed fitting.
   silence_cleanup:
-    enabled: true
+    enabled: false
     silence_threshold_dbfs: -45
     min_internal_silence_ms: 350
     keep_internal_silence_ms: 180
