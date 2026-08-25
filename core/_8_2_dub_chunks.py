@@ -14,6 +14,43 @@ TRANS_SRT = "output/audio/trans_subs_for_audio.srt"
 MAX_MERGE_COUNT = 5
 ESTIMATOR = None
 
+
+def clean_match_text(text):
+    """Normalize subtitle text for sequential matching."""
+    if not text or not isinstance(text, str):
+        return ''
+    return re.sub(r'[^\w\s]|[\s]', '', text)
+
+
+def find_matching_span(row, content_lines, source_lines, start_idx):
+    """Find a contiguous subtitle span, preferring stable source text.
+
+    Translated task text may already be normalized for speech (for example,
+    ``1947`` becomes Chinese number words), so source text is a more reliable
+    key. Trying later starts also lets matching recover after an isolated miss.
+    """
+    target = clean_match_text(row.get('text', ''))
+    source_target = clean_match_text(row.get('origin', ''))
+
+    for candidate_start in range(start_idx, len(content_lines)):
+        translated_current = ''
+        source_current = ''
+        for i in range(candidate_start, len(content_lines)):
+            translated_current += clean_match_text(content_lines[i])
+            if i < len(source_lines):
+                source_current += clean_match_text(source_lines[i])
+
+            source_matches = bool(source_target) and source_current == source_target
+            translated_matches = bool(target) and translated_current == target
+            if source_matches or translated_matches:
+                return candidate_start, i + 1
+
+            if source_target and not source_target.startswith(source_current):
+                break
+            if not source_target and target and not target.startswith(translated_current):
+                break
+    return None
+
 def calc_if_too_fast(est_dur, tol_dur, duration, tolerance):
     accept = load_key("speed_factor.accept") # Maximum acceptable speed factor
     if est_dur / accept > tol_dur:  # Even max speed factor cannot adapt
@@ -175,12 +212,6 @@ def gen_dub_chunks():
     df['src_lines'] = None
     last_idx = 0
 
-    def clean_text(text):
-        """clean space and punctuation"""
-        if not text or not isinstance(text, str):
-            return ''
-        return re.sub(r'[^\w\s]|[\s]', '', text)
-
     def safe_text(value):
         if pd.isna(value):
             return ''
@@ -193,30 +224,24 @@ def gen_dub_chunks():
         return [origin] if count <= 1 else [origin] + [''] * (count - 1)
 
     for idx, row in df.iterrows():
-        target = clean_text(row['text'])
-        matches = []
-        current = ''
-        match_indices = []  # Store indices for matching lines
-        
-        for i in range(last_idx, len(content_lines)):
-            line = content_lines[i]
-            cleaned_line = clean_text(line)
-            current += cleaned_line
-            matches.append(line)  # 存储原始文本
-            match_indices.append(i)
-            
-            if current == target:
-                df.at[idx, 'lines'] = matches
-                if match_indices and max(match_indices) < len(ori_content_lines):
-                    df.at[idx, 'src_lines'] = [ori_content_lines[i] for i in match_indices]
-                else:
-                    df.at[idx, 'src_lines'] = origin_lines_for_row(row, len(matches))
-                last_idx = i + 1
-                break
-        else:  # If no match is found
+        target = clean_match_text(row['text'])
+        matched_span = find_matching_span(
+            row, content_lines, ori_content_lines, last_idx
+        )
+
+        if matched_span is not None:
+            match_start, match_end = matched_span
+            matches = content_lines[match_start:match_end]
+            df.at[idx, 'lines'] = matches
+            if match_end <= len(ori_content_lines):
+                df.at[idx, 'src_lines'] = ori_content_lines[match_start:match_end]
+            else:
+                df.at[idx, 'src_lines'] = origin_lines_for_row(row, len(matches))
+            last_idx = match_end
+        else:
             rprint(f"[yellow]Warning: Matching failed at line {idx}; using task text fallback.[/yellow]")
             rprint(f"Target: '{target}'")
-            rprint(f"Current: '{current}'")
+            rprint(f"Source target: '{clean_match_text(safe_text(row.get('origin', '')))}'")
             df.at[idx, 'lines'] = [safe_text(row['text'])]
             df.at[idx, 'src_lines'] = origin_lines_for_row(row, 1)
 

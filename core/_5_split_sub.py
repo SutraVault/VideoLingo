@@ -134,8 +134,12 @@ def align_subs(
     expected_parts = len(src_parts)
     
     def valid_align(response_data):
+        if not isinstance(response_data, dict):
+            return {"status": "error", "message": "Response must be a JSON object"}
         if 'align' not in response_data:
             return {"status": "error", "message": "Missing required key: `align`"}
+        if not isinstance(response_data['align'], list):
+            return {"status": "error", "message": "`align` must be a JSON array"}
         if len(response_data['align']) != expected_parts:
             return {
                 "status": "error",
@@ -143,6 +147,13 @@ def align_subs(
             }
         if not all(isinstance(item, dict) for item in response_data['align']):
             return {"status": "error", "message": "`align` must be a list of JSON objects"}
+        for i, item in enumerate(response_data['align'], start=1):
+            key = f'target_part_{i}'
+            if not str(item.get(key, '')).strip():
+                return {
+                    "status": "error",
+                    "message": f"Missing or empty required key: `{key}`",
+                }
         return {"status": "success", "message": "Align completed"}
 
     try:

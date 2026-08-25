@@ -1,13 +1,13 @@
 import os
 import json
 import math
+import time
 from datetime import datetime
 from threading import Lock
 import json_repair
 from openai import OpenAI
 from core.utils.config_utils import load_key
 from rich import print as rprint
-from core.utils.decorator import except_handler
 
 # ------------
 # cache gpt response
@@ -138,8 +138,16 @@ def _load_cache(prompt, resp_type, log_title, model=None, base_url=None, request
 # ask gpt once
 # ------------
 
-@except_handler("GPT request failed", retry=5)
-def ask_gpt(
+class ResponseValidationError(ValueError):
+    """A valid API response that did not match the caller's required shape."""
+
+    def __init__(self, message, response_content=""):
+        super().__init__(f"API response error: {message}")
+        self.validation_message = message
+        self.response_content = response_content
+
+
+def _ask_gpt_once(
     prompt,
     resp_type=None,
     valid_def=None,
@@ -211,10 +219,70 @@ def ask_gpt(
             if attempt_tracker is not None:
                 attempt_tracker["validation_errors"] = attempt_tracker.get("validation_errors", 0) + 1
             _save_cache(model, prompt, resp_content, resp_type, resp, log_title="error", message=valid_resp['message'], usage=usage, base_url=base_url, request_variant=request_variant)
-            raise ValueError(f"❎ API response error: {valid_resp['message']}")
+            raise ResponseValidationError(valid_resp['message'], resp_content)
 
     _save_cache(model, prompt, resp_content, resp_type, resp, log_title=log_title, usage=usage, base_url=base_url, request_variant=request_variant)
     return resp
+
+
+def _validation_retry_prompt(original_prompt, error, attempt):
+    previous_response = str(error.response_content or "").strip()
+    if len(previous_response) > 2000:
+        previous_response = previous_response[:2000] + "..."
+    return f"""{original_prompt}
+
+## CORRECTION REQUIRED (retry {attempt})
+Your previous response failed validation: {error.validation_message}
+Previous invalid response:
+```text
+{previous_response}
+```
+Return a corrected JSON object only. Preserve every required key and the exact
+number of requested items. Never return an empty object and do not include
+analysis, commentary, or Markdown fences."""
+
+
+def ask_gpt(
+    prompt,
+    resp_type=None,
+    valid_def=None,
+    log_title="default",
+    api_config=None,
+    use_cache=True,
+    attempt_tracker=None,
+):
+    """Call the configured LLM, adding actionable feedback after validation failures."""
+    original_prompt = prompt
+    current_prompt = prompt
+    last_exception = None
+    max_attempts = 6
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return _ask_gpt_once(
+                current_prompt,
+                resp_type=resp_type,
+                valid_def=valid_def,
+                log_title=log_title,
+                api_config=api_config,
+                use_cache=use_cache,
+                attempt_tracker=attempt_tracker,
+            )
+        except Exception as error:
+            last_exception = error
+            rprint(
+                f"[red]GPT request failed: {error}, "
+                f"attempt: {attempt}/{max_attempts}[/red]"
+            )
+            if attempt == max_attempts:
+                raise
+            if isinstance(error, ResponseValidationError):
+                current_prompt = _validation_retry_prompt(
+                    original_prompt, error, attempt + 1
+                )
+            time.sleep(2 ** (attempt - 1))
+
+    raise last_exception
 
 
 if __name__ == '__main__':

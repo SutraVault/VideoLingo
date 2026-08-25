@@ -223,13 +223,12 @@ def get_align_prompt(src_sub, tr_sub, src_part):
     src_splits = src_part.split('\n')
     num_parts = len(src_splits)
     src_part = src_part.replace('\n', ' [br] ')
-    align_parts_json = ','.join(
-        f'''
-        {{
-            "src_part_{i+1}": "{src_splits[i]}",
-            "target_part_{i+1}": "Corresponding aligned {targ_lang} subtitle part"
-        }}''' for i in range(num_parts)
-    )
+    output_template = {
+        "align": [
+            {f"target_part_{i+1}": f"Non-empty {targ_lang} subtitle text"}
+            for i in range(num_parts)
+        ]
+    }
 
     align_prompt = f'''
 ## Role
@@ -239,12 +238,11 @@ You are a Netflix subtitle alignment expert fluent in both {src_lang} and {targ_
 We have {src_lang} and {targ_lang} original subtitles for a Netflix program, as well as a pre-processed split version of {src_lang} subtitles.
 Your task is to create the best splitting scheme for the {targ_lang} subtitles based on this information.
 
-1. Analyze the word order and structural correspondence between {src_lang} and {targ_lang} subtitles
-2. Split the {targ_lang} subtitles according to the pre-processed {src_lang} split version
-3. Never leave empty lines. If it's difficult to split based on meaning, you may appropriately rewrite the sentences that need to be aligned
-4. Do not add comments or explanations in the translation, as the subtitles are for the audience to read
-5. Every align item must contain the exact numbered target key shown in the JSON template, and every target_part value must be non-empty
-6. If a source part has no direct target-language words, rewrite or redistribute the target subtitle so that the part still has a short readable target subtitle
+1. Split the {targ_lang} subtitle into exactly {num_parts} meaningful, readable parts corresponding to the source parts.
+2. Return exactly {num_parts} objects in `align`, in source order.
+3. Object 1 must contain only `target_part_1`, object 2 only `target_part_2`, and so on.
+4. Every target value must be a non-empty string. Redistribute or lightly rewrite words when a literal split would leave an empty part.
+5. Return only the JSON object. Do not include analysis, explanations, or Markdown fences.
 
 ## INPUT
 <subtitles>
@@ -253,17 +251,8 @@ Your task is to create the best splitting scheme for the {targ_lang} subtitles b
 Pre-processed {src_lang} Subtitles ([br] indicates split points): {src_part}
 </subtitles>
 
-## Output in only JSON format and no other text
-```json
-{{
-    "analysis": "Brief analysis of word order, structure, and semantic correspondence between two subtitles",
-    "align": [
-        {align_parts_json}
-    ]
-}}
-```
-
-Note: Start you answer with ```json and end with ```, do not add any other text.
+## Required output schema
+{json.dumps(output_template, ensure_ascii=False, indent=2)}
 '''.strip()
     return align_prompt
 
