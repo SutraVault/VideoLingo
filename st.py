@@ -741,6 +741,29 @@ def audio_processing_section():
             unsafe_allow_html=True,
         )
 
+        if st.session_state.pop("_audio_rebuild_complete", False):
+            st.success(
+                t("Audio subtitles rebuilt. Dubbing regeneration has started.")
+            )
+
+        if not runner.is_active and st.button(
+            t("Rebuild audio subtitles and dubbing"),
+            key="rebuild_audio_subtitles_and_dubbing",
+            help=t(
+                "Restore reviewed translations and punctuation, then clear old TTS tasks and generated dubbing while preserving reference audio."
+            ),
+        ):
+            with st.spinner(t("Rebuilding audio subtitles and clearing old dubbing...")):
+                rebuild_audio_subtitles_and_clear_dubbing()
+            runner.reset()
+            record_event(
+                t("Rebuild audio subtitles and dubbing"),
+                event_type="audio_rebuild_clicked",
+            )
+            _start_runner(runner, _get_audio_steps(), t("Dubbing"))
+            st.session_state["_audio_rebuild_complete"] = True
+            st.rerun()
+
         if not os.path.exists(DUB_VIDEO):
             if os.path.exists(TRANS_SRT) and not runner.is_active and not runner.is_done:
                 _notify_user_handoff(

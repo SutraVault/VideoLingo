@@ -20,7 +20,10 @@ try:
     )
     from .utils import *
     from .utils.onekeycleanup import cleanup
-    from .utils.delete_retry_dubbing import delete_dubbing_files
+    from .utils.delete_retry_dubbing import (
+        delete_dubbing_files,
+        rebuild_audio_subtitles_and_clear_dubbing,
+    )
 except ImportError:
     pass
 
@@ -30,6 +33,7 @@ __all__ = [
     'update_key',
     'cleanup',
     'delete_dubbing_files',
+    'rebuild_audio_subtitles_and_clear_dubbing',
     '_1_ytdlp',
     '_2_asr',
     '_3_1_split_nlp',
