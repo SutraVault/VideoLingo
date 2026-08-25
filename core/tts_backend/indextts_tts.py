@@ -15,6 +15,7 @@ from core.utils import *
 
 
 SERVER_PROCESS = None
+_SHARED_REFERENCE_CACHE = {}
 
 
 def _active_settings():
@@ -220,6 +221,10 @@ def _shared_reference_audio(settings, current_dir):
     refers_dir = fallback.parent
     min_duration = float(settings.get("min_refer_duration", 0) or 0)
     max_duration = float(settings.get("max_refer_duration", 0) or 0)
+    cache_key = (str(refers_dir.resolve()), min_duration, max_duration)
+    cached_path = _SHARED_REFERENCE_CACHE.get(cache_key)
+    if cached_path is not None and cached_path.exists():
+        return cached_path
     candidates = []
 
     for path in sorted(refers_dir.glob("*.wav"), key=_sort_reference_path):
@@ -233,6 +238,7 @@ def _shared_reference_audio(settings, current_dir):
                     f"[yellow]IndexTTS shared reference {fallback.name} is short "
                     f"({_wav_duration(fallback):.2f}s); using {path.name} ({duration:.2f}s).[/yellow]"
                 )
+            _SHARED_REFERENCE_CACHE[cache_key] = path
             return path
 
     if candidates:
@@ -242,8 +248,10 @@ def _shared_reference_audio(settings, current_dir):
                 f"[yellow]No IndexTTS reference met min_refer_duration={min_duration:.1f}s; "
                 f"using longest reference {path.name} ({duration:.2f}s).[/yellow]"
             )
+        _SHARED_REFERENCE_CACHE[cache_key] = path
         return path
 
+    _SHARED_REFERENCE_CACHE[cache_key] = fallback
     return fallback
 
 
