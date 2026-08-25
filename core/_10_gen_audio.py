@@ -354,6 +354,29 @@ def regenerate_oversized_indextts_rows(tasks_df: pd.DataFrame, max_speed: float)
         tasks_df.at[index, 'real_dur'] = new_total
         tasks_df.at[index, 'silence_removed'] = original_total - new_total
         tasks_df.at[index, 'silence_ratio'] = weighted_silence / original_total if original_total else 0.0
+        if new_total / available > max_speed and len(lines) > 1:
+            language = str(load_key("indextts.v2_5.language")).upper()
+            separator = "，" if language == "ZH" else " "
+            combined_line = separator.join(str(line).strip(" ，,.") for line in lines)
+            combined_file = TEMP_FILE_TEMPLATE.format(f"{number}_0")
+            rprint(
+                f"[yellow]Subtitle {number} still exceeds the limit after per-line regeneration; "
+                "combining its short lines into one TTS inference to remove repeated edge overhead.[/yellow]"
+            )
+            regenerate_indextts_to_duration(combined_line, combined_file, number, allowed_total)
+            before, after, silence_ratio = clean_generated_silence(combined_file)
+            new_total = after
+            tasks_df.at[index, 'lines'] = [combined_line]
+            src_lines = row.get('src_lines', [])
+            if isinstance(src_lines, str):
+                try:
+                    src_lines = eval(src_lines)
+                except (SyntaxError, ValueError):
+                    src_lines = [src_lines]
+            tasks_df.at[index, 'src_lines'] = [" ".join(str(line) for line in src_lines)]
+            tasks_df.at[index, 'real_dur'] = after
+            tasks_df.at[index, 'silence_removed'] = before - after
+            tasks_df.at[index, 'silence_ratio'] = silence_ratio
         if new_total / available > max_speed:
             raise ValueError(
                 f"IndexTTS2.5 subtitle {number} is still too long after targeted regeneration: "
