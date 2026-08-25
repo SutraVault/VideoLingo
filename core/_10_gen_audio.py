@@ -425,6 +425,12 @@ def regenerate_oversized_indextts_rows(
     """Regenerate only cached IndexTTS2.5 rows that cannot fit at max_speed."""
     if load_key("tts_method") != "indextts" or str(load_key("indextts.version")) != "2.5":
         return tasks_df
+    if not bool(load_key("indextts.v2_5.auto_duration.enabled")):
+        rprint(
+            "[cyan]IndexTTS2.5 native duration regeneration is disabled to preserve "
+            "natural word boundaries; oversized rows will use uniform final fitting.[/cyan]"
+        )
+        return tasks_df
 
     tasks_df = tasks_df.copy()
     emergency_max_speed = float(emergency_max_speed or max_speed)

@@ -208,7 +208,10 @@ indextts:
     # Baseline value used for the first pass.
     duration_factor: 1.0
     auto_duration:
-      enabled: true
+      # Native duration control can distort Chinese word boundaries (for example,
+      # inserting a pause inside “枪托”). Generate natural speech first and let
+      # the final uniform ffmpeg fit handle acceptable timing differences.
+      enabled: false
       # Regenerate only when the first pass exceeds the allocated time by 8%.
       overflow_threshold: 0.08
       # Keep a small timing margin for silence cleanup and ffmpeg rounding.
