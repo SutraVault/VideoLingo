@@ -469,3 +469,12 @@ def regenerate_indextts_to_duration(text, save_as, number, max_duration):
         factor = round(next_factor, 3)
 
     return _wav_duration(Path(save_as)), factor
+
+
+def regenerate_indextts_natural(text, save_as, number):
+    """Generate a fresh IndexTTS candidate without native duration control."""
+    start_indextts_server()
+    settings = _active_settings()
+    ref_audio_path = _reference_audio_for(number)
+    indextts_tts(text, save_as, ref_audio_path)
+    return _wav_duration(Path(save_as))

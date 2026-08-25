@@ -1,10 +1,12 @@
 import os
 import math
+import re
 import time
 import shutil
 import subprocess
 import threading
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Tuple
 
 import pandas as pd
@@ -21,6 +23,7 @@ from core.asr_backend.audio_preprocess import get_audio_duration
 from core.tts_backend.tts_main import tts_main
 from core.tts_backend.indextts_tts import (
     get_indextts_duration_stats,
+    regenerate_indextts_natural,
     regenerate_indextts_to_duration,
     reset_indextts_duration_stats,
 )
@@ -133,6 +136,40 @@ def clean_generated_silence(audio_file: str) -> tuple[float, float, float]:
     rebuilt = rebuilt.set_channels(audio.channels).set_sample_width(audio.sample_width)
     rebuilt.export(audio_file, format="wav")
     return original_ms / 1000, len(rebuilt) / 1000, total_silence_ms / original_ms
+
+
+def clean_abnormal_recovery_silence(
+    audio_file: str,
+    min_silence_ms: int,
+    keep_silence_ms: int,
+) -> tuple[float, float, float]:
+    """Collapse only very long pauses in an otherwise unusable recovery candidate."""
+    audio = AudioSegment.from_wav(audio_file)
+    original_ms = len(audio)
+    if original_ms == 0:
+        return 0.0, 0.0, 0.0
+    ranges = detect_silence(
+        audio,
+        min_silence_len=min_silence_ms,
+        silence_thresh=-40,
+        seek_step=5,
+    )
+    if not ranges:
+        return original_ms / 1000, original_ms / 1000, 0.0
+
+    rebuilt = AudioSegment.empty()
+    cursor = 0
+    removed_ms = 0
+    for start, end in ranges:
+        rebuilt += audio[cursor:start]
+        retained_ms = min(keep_silence_ms, end - start)
+        rebuilt += AudioSegment.silent(duration=retained_ms, frame_rate=audio.frame_rate)
+        removed_ms += (end - start) - retained_ms
+        cursor = end
+    rebuilt += audio[cursor:]
+    rebuilt = rebuilt.set_channels(audio.channels).set_sample_width(audio.sample_width)
+    rebuilt.export(audio_file, format="wav")
+    return original_ms / 1000, len(rebuilt) / 1000, removed_ms / original_ms
 
 def parse_df_srt_time(time_str: str) -> float:
     """Convert SRT time format to seconds"""
@@ -417,6 +454,131 @@ def refresh_cached_tts_durations(tasks_df: pd.DataFrame) -> pd.DataFrame:
     return tasks_df
 
 
+def regenerate_oversized_indextts2_rows(
+    tasks_df: pd.DataFrame,
+    max_speed: float,
+    emergency_max_speed: float,
+) -> pd.DataFrame:
+    """Retry only oversized IndexTTS2 rows and keep the best natural candidate."""
+    if load_key("tts_method") != "indextts" or str(load_key("indextts.version")) != "2":
+        return tasks_df
+
+    recovery = load_key("indextts.v2.targeted_recovery") or {}
+    if not recovery.get("enabled", False):
+        return tasks_df
+
+    tasks_df = tasks_df.copy()
+    max_retries = max(0, int(recovery.get("max_retries", 2)))
+    min_estimated_ratio = float(recovery.get("min_estimated_duration_ratio", 0.75))
+    min_silence_ms = int(recovery.get("min_abnormal_silence_ms", 600))
+    keep_silence_ms = int(recovery.get("keep_abnormal_silence_ms", 220))
+
+    for index, row in tasks_df.iterrows():
+        available = float(row['tol_dur']) - 0.1
+        current_total = float(row.get('real_dur', 0) or 0)
+        if available <= 0 or current_total / available <= max_speed:
+            continue
+
+        lines = eval(row['lines']) if isinstance(row['lines'], str) else row['lines']
+        number = row['number']
+        line_weights = [
+            max(1, len(re.sub(r"[\s，。！？、；：,.!?;:]", "", str(line))))
+            for line in lines
+        ]
+        estimated_total = float(row.get('est_dur', 0) or 0)
+        desired_total = available * max_speed * 0.98
+        rprint(
+            f"[yellow]IndexTTS2 subtitle {number} is too long ({current_total:.3f}s for "
+            f"{available:.3f}s); regenerating only this subtitle.[/yellow]"
+        )
+
+        for line_index, line in enumerate(lines):
+            temp_file = TEMP_FILE_TEMPLATE.format(f"{number}_{line_index}")
+            best_file = temp_file
+            best_duration = get_audio_duration(temp_file)
+            estimated_line = (
+                estimated_total * line_weights[line_index] / sum(line_weights)
+                if estimated_total > 0 else 0.0
+            )
+            minimum_valid_duration = estimated_line * min_estimated_ratio
+            retry_files = []
+            try:
+                for attempt in range(max_retries):
+                    retry_file = str(
+                        Path(temp_file).with_name(
+                            f"{Path(temp_file).stem}_recovery_{attempt + 1}.wav"
+                        )
+                    )
+                    retry_files.append(retry_file)
+                    candidate_duration = regenerate_indextts_natural(
+                        line, retry_file, number
+                    )
+                    if candidate_duration < minimum_valid_duration:
+                        rprint(
+                            f"[yellow]Rejected suspiciously short IndexTTS2 candidate for "
+                            f"subtitle {number}: {candidate_duration:.3f}s.[/yellow]"
+                        )
+                        continue
+                    if candidate_duration < best_duration:
+                        best_file = retry_file
+                        best_duration = candidate_duration
+                    if best_duration <= desired_total * line_weights[line_index] / sum(line_weights):
+                        break
+                if best_file != temp_file:
+                    shutil.copy2(best_file, temp_file)
+            finally:
+                for retry_file in retry_files:
+                    try:
+                        os.remove(retry_file)
+                    except FileNotFoundError:
+                        pass
+
+        refreshed_durations = [
+            get_audio_duration(TEMP_FILE_TEMPLATE.format(f"{number}_{line_index}"))
+            for line_index in range(len(lines))
+        ]
+        new_total = sum(refreshed_durations)
+        removed_total = 0.0
+        weighted_silence = 0.0
+        if new_total > desired_total:
+            rprint(
+                f"[yellow]IndexTTS2 subtitle {number} still exceeds the preferred limit; "
+                f"collapsing only pauses longer than {min_silence_ms}ms.[/yellow]"
+            )
+            for line_index in range(len(lines)):
+                temp_file = TEMP_FILE_TEMPLATE.format(f"{number}_{line_index}")
+                before, after, silence_ratio = clean_abnormal_recovery_silence(
+                    temp_file, min_silence_ms, keep_silence_ms
+                )
+                removed_total += before - after
+                weighted_silence += silence_ratio * before
+            new_total = sum(
+                get_audio_duration(TEMP_FILE_TEMPLATE.format(f"{number}_{line_index}"))
+                for line_index in range(len(lines))
+            )
+
+        tasks_df.at[index, 'real_dur'] = new_total
+        tasks_df.at[index, 'silence_removed'] = (
+            float(row.get('silence_removed', 0) or 0) + removed_total
+        )
+        tasks_df.at[index, 'silence_ratio'] = weighted_silence / new_total if new_total else 0.0
+        required_speed = new_total / available
+        rprint(
+            f"[cyan]IndexTTS2 subtitle {number} targeted recovery: "
+            f"{current_total:.3f}s→{new_total:.3f}s ({required_speed:.3f}x fit).[/cyan]"
+        )
+        # Persist each recovered row so a later problematic subtitle does not
+        # make the next UI retry repeat work that already succeeded.
+        save_audio_tasks(tasks_df)
+        if required_speed > emergency_max_speed:
+            raise ValueError(
+                f"IndexTTS2 subtitle {number} is still too long after {max_retries} targeted "
+                f"regeneration attempts: {required_speed:.3f}x > emergency limit "
+                f"{emergency_max_speed:.3f}x. Shorten its translation."
+            )
+    return tasks_df
+
+
 def regenerate_oversized_indextts_rows(
     tasks_df: pd.DataFrame,
     max_speed: float,
@@ -513,6 +675,9 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
     emergency_ratio = float(load_key("speed_factor.emergency_overflow_ratio"))
     emergency_max_speed = max_speed * emergency_ratio
     tasks_df = refresh_cached_tts_durations(tasks_df)
+    tasks_df = regenerate_oversized_indextts2_rows(
+        tasks_df, max_speed, emergency_max_speed
+    )
     tasks_df = regenerate_oversized_indextts_rows(
         tasks_df, max_speed, emergency_max_speed
     )
