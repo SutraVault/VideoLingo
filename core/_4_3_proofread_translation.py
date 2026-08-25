@@ -10,6 +10,7 @@ from core.utils import ask_gpt, load_key
 from core.utils.excel_utils import read_excel_with_aliases
 from core.utils.models import _4_2_TRANSLATION, _4_3_PROOFREAD_TRANSLATION
 from core._8_1_audio_task import check_len_then_trim
+from core.utils.llm_stage_utils import stage_api_config, staged_llm_enabled, risky_row_indices
 
 console = Console()
 
@@ -66,7 +67,25 @@ def _chunks(items, chunk_size):
         yield start, items[start:start + chunk_size]
 
 
+def _normalized_comparison_text(value):
+    return " ".join(str(value or "").split())
+
+
+def _set_proofread_changed_column(df):
+    if "LLM Proofread" not in df.columns:
+        return df
+    originals = df["Original Translation"] if "Original Translation" in df.columns else df["Translation"]
+    df = df.copy()
+    df["Proofread Changed"] = [
+        _normalized_comparison_text(original) != _normalized_comparison_text(proofread)
+        for original, proofread in zip(originals, df["LLM Proofread"])
+    ]
+    return df
+
+
 def _proofread_api_config():
+    if staged_llm_enabled():
+        return stage_api_config("proofread")
     if not load_key("llm_proofread.override_api"):
         return None
     return {
@@ -100,14 +119,14 @@ Conservatively proofread subtitle translations from {src_language} to {target_la
 
 Rules:
 1. Only change a translation when there is a clear error.
-2. Fix clear mistranslations, omissions, wrong terminology, grammar errors, and broken punctuation.
+2. Check for mistranslations, omissions, and information added without support from the source.
 3. Do not rewrite for style, elegance, or personal preference.
 4. Prefer the original translation when it is acceptable.
-5. Keep technical names, vehicle names, unit names, operation names, and proper nouns consistent with the original translation unless clearly wrong.
-6. Keep each line concise for subtitles.
-7. Preserve the exact ids and row count.
-8. Do not merge, split, add, delete, or reorder lines.
-9. Do not add explanations or comments.
+5. Verify pronoun references, people, places, organizations, technical/military terms, vehicle/weapon names, unit names, and operation names.
+6. Preserve and verify all dates, times, quantities, calibers, model numbers, and measurement units.
+7. Keep natural documentary narration style and concise wording suitable for speaking aloud.
+8. Preserve the exact ids and row count; do not merge, split, add, delete, or reorder lines.
+9. Do not add explanations or comments. If no clear issue exists, return the input translation unchanged.
 
 Input rows:
 {json.dumps(input_rows, ensure_ascii=False)}
@@ -182,6 +201,13 @@ def proofread_translation(force=False):
 
 def _proofread_translation_unlocked(force=False):
     if os.path.exists(_4_3_PROOFREAD_TRANSLATION) and not force:
+        existing = read_excel_with_aliases(
+            _4_3_PROOFREAD_TRANSLATION, required_columns=["Source", "Translation"]
+        )
+        if "LLM Proofread" in existing.columns and "Proofread Changed" not in existing.columns:
+            existing = _set_proofread_changed_column(existing)
+            _safe_to_excel(existing, _4_3_PROOFREAD_TRANSLATION)
+            console.print("[green]Added Proofread Changed column to the existing proofread workbook.[/green]")
         console.print(f"[yellow]Proofread translation already exists: {_4_3_PROOFREAD_TRANSLATION}[/yellow]")
         return
 
@@ -199,9 +225,21 @@ def _proofread_translation_unlocked(force=False):
     api_config = _proofread_api_config()
     chunk_lines = int(load_key("llm_proofread.chunk_lines"))
 
-    for start, chunk in _chunks(rows, chunk_lines):
+    if staged_llm_enabled() and load_key("llm_stages.proofread.only_risky"):
+        risky_labels = risky_row_indices(df, max_ratio=0.15, min_score=2.5)
+        risky = {df.index.get_loc(label) for label in risky_labels}
+        selected_rows = [row for index, row in enumerate(rows) if index in risky]
+        for index, row in enumerate(rows):
+            if index not in risky:
+                proofread_text[index] = row["translation"]
+        console.print(f"[cyan]Risk-based proofreading selected {len(selected_rows)}/{len(rows)} rows.[/cyan]")
+    else:
+        selected_rows = rows
+
+    for start, chunk in _chunks(selected_rows, chunk_lines):
         prompt = _build_prompt(chunk)
-        console.print(f"[cyan]Proofreading rows {start + 1}-{start + len(chunk)}...[/cyan]")
+        row_ids = f"{chunk[0]['id']}-{chunk[-1]['id']}"
+        console.print(f"[cyan]Proofreading row ids {row_ids}...[/cyan]")
         result = ask_gpt(
             prompt,
             resp_type="json",
@@ -212,7 +250,7 @@ def _proofread_translation_unlocked(force=False):
         )
         for row in chunk:
             proofread_text[row["id"] - 1] = str(result[str(row["id"])]["proofread"]).replace("\n", " ").strip()
-        console.print(f"[green]Proofread rows {start + 1}-{start + len(chunk)}[/green]")
+        console.print(f"[green]Proofread row ids {row_ids}[/green]")
 
     if any(not item for item in proofread_text):
         raise ValueError("LLM proofreading produced empty rows")
@@ -220,12 +258,14 @@ def _proofread_translation_unlocked(force=False):
     output_df = df.copy()
     output_df["LLM Proofread"] = proofread_text
     output_df["Original Translation"] = df["Translation"]
+    output_df = _set_proofread_changed_column(output_df)
 
     mode = load_key("llm_proofread.mode")
     if mode == "apply":
         output_df["Translation"] = output_df["LLM Proofread"]
         output_df = _trim_for_subtitle_timing(output_df)
         output_df["LLM Proofread"] = output_df["Translation"]
+        output_df = _set_proofread_changed_column(output_df)
         _safe_to_excel(output_df, _4_2_TRANSLATION)
 
     saved_path = _safe_to_excel(output_df, _4_3_PROOFREAD_TRANSLATION)
@@ -240,6 +280,7 @@ def apply_proofread_to_translation():
     df["Translation"] = df["LLM Proofread"]
     df = _trim_for_subtitle_timing(df)
     df["LLM Proofread"] = df["Translation"]
+    df = _set_proofread_changed_column(df)
     _safe_to_excel(df, _4_2_TRANSLATION)
     _safe_to_excel(df, _4_3_PROOFREAD_TRANSLATION)
     console.print(f"[green]Applied LLM Proofread column to {_4_2_TRANSLATION}[/green]")

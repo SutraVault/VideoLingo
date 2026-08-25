@@ -45,6 +45,35 @@ def _search_models(search_term, **kwargs):
         matched.insert(0, search_term)
     return matched
 
+
+def _stage_model_input(label, key):
+    current = str(load_key(key))
+    models = st.session_state.get("_model_list", [])
+    options = list(dict.fromkeys([current] + models))
+    if models:
+        selected = st.selectbox(label, options=options, index=0, key=f"ui_{key}")
+    else:
+        selected = st.text_input(label, value=current, key=f"ui_{key}")
+    if selected != current:
+        update_key(key, selected)
+    return selected
+
+
+def _reasoning_input(label, key, allow_off=True):
+    options = ["auto"] + (["off"] if allow_off else []) + ["low", "medium", "high", "xhigh"]
+    current = str(load_key(key))
+    selected = st.selectbox(
+        label,
+        options=options,
+        index=options.index(current) if current in options else 0,
+        help="Auto sends no override; support for Off and effort levels depends on the selected model/provider.",
+        key=f"ui_{key}",
+    )
+    if selected != current:
+        update_key(key, selected)
+        st.rerun()
+    return selected
+
 def _watermark_preview_style(position):
     positions = {
         "top_left": "top: 12px; left: 12px;",
@@ -200,6 +229,59 @@ def page_setting():
         if llm_support_json != load_key("api.llm_support_json"):
             update_key("api.llm_support_json", llm_support_json)
             st.rerun()
+
+        staged_enabled = st.toggle(
+            "Stage-specific LLM routing",
+            value=load_key("llm_stages.enabled"),
+            help="Choose independent models and reasoning modes for splitting, translation, hard lines, and proofreading.",
+        )
+        if staged_enabled != load_key("llm_stages.enabled"):
+            update_key("llm_stages.enabled", staged_enabled)
+            st.rerun()
+
+        if staged_enabled:
+            st.caption("Any OpenAI-compatible/OpenRouter model can be used; the displayed defaults are editable examples.")
+            with st.expander("Stage-specific LLM settings", expanded=True):
+                _stage_model_input("Summary and terminology model", "llm_stages.summary.model")
+                _reasoning_input("Summary reasoning", "llm_stages.summary.reasoning")
+
+                _stage_model_input("Sentence splitting model", "llm_stages.split.model")
+                _reasoning_input("Sentence splitting reasoning", "llm_stages.split.reasoning")
+
+                _stage_model_input("Translation model", "llm_stages.translate.model")
+                _reasoning_input("Translation reasoning", "llm_stages.translate.reasoning")
+
+                hard_enabled = st.checkbox(
+                    "Second pass for difficult lines",
+                    value=load_key("llm_stages.hard_translation.enabled"),
+                )
+                if hard_enabled != load_key("llm_stages.hard_translation.enabled"):
+                    update_key("llm_stages.hard_translation.enabled", hard_enabled)
+                    st.rerun()
+                if hard_enabled:
+                    _stage_model_input("Difficult-line model", "llm_stages.hard_translation.model")
+                    _reasoning_input("Difficult-line reasoning", "llm_stages.hard_translation.reasoning")
+                    hard_ratio = st.slider(
+                        "Maximum difficult-line percentage",
+                        min_value=5,
+                        max_value=30,
+                        value=int(float(load_key("llm_stages.hard_translation.max_ratio")) * 100),
+                        step=5,
+                        format="%d%%",
+                    )
+                    hard_ratio_value = hard_ratio / 100
+                    if hard_ratio_value != load_key("llm_stages.hard_translation.max_ratio"):
+                        update_key("llm_stages.hard_translation.max_ratio", hard_ratio_value)
+
+                _stage_model_input("Proofreading model", "llm_stages.proofread.model")
+                _reasoning_input("Proofreading reasoning", "llm_stages.proofread.reasoning")
+                proofread_risky = st.checkbox(
+                    "Proofread only risky lines",
+                    value=load_key("llm_stages.proofread.only_risky"),
+                )
+                if proofread_risky != load_key("llm_stages.proofread.only_risky"):
+                    update_key("llm_stages.proofread.only_risky", proofread_risky)
+                    st.rerun()
     with st.expander(t("Subtitles Settings"), expanded=True):
         c1, c2 = st.columns(2)
         with c1:

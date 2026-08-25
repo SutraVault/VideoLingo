@@ -2,6 +2,7 @@ import concurrent.futures
 from difflib import SequenceMatcher
 import math
 from core.prompts import get_split_prompt
+from core.utils.llm_stage_utils import stage_api_config
 from core.spacy_utils.load_nlp_model import init_nlp
 from core.utils import *
 from rich.console import Console
@@ -114,8 +115,12 @@ def split_sentence(sentence, num_parts, word_limit=20, index=-1, retry_attempt=0
         split_key = get_split_key(response_data)
         if split_key not in response_data:
             return {"status": "error", "message": "Missing required key: `split`"}
-        if "[br]" not in response_data[split_key]:
-            return {"status": "error", "message": "Split failed, no [br] found"}
+        split_text = str(response_data[split_key])
+        parts = [part.strip() for part in split_text.split("[br]")]
+        if len(parts) != num_parts or any(not part for part in parts):
+            return {"status": "error", "message": f"Expected exactly {num_parts} non-empty parts"}
+        if any(len(part.split()) > word_limit for part in parts):
+            return {"status": "error", "message": f"A split part exceeds {word_limit} words"}
         return {"status": "success", "message": "Split completed"}
     
     try:
@@ -125,6 +130,7 @@ def split_sentence(sentence, num_parts, word_limit=20, index=-1, retry_attempt=0
             valid_def=valid_split,
             log_title='split_by_meaning',
             attempt_tracker=attempt_tracker,
+            api_config=stage_api_config("split"),
         )
         response_data = normalize_split_response(response_data)
         split_key = get_split_key(response_data)

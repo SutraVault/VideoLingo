@@ -13,10 +13,35 @@ display_language: "zh-CN"
 api:
   key: 'your_openai_compatible_api_key'
   base_url: 'https://openrouter.ai/api/v1'
-  model: 'qwen/qwen3.5-flash-02-23'
+  model: 'deepseek/deepseek-v4-flash'
   llm_support_json: true
   reasoning:
-    effort: 'none'
+    # This OpenRouter endpoint requires reasoning and rejects "none".
+    effort: 'low'
+
+# Optional model-agnostic routing for each LLM stage. When disabled, all
+# stages keep using api.model/api.reasoning exactly as before.
+llm_stages:
+  enabled: true
+  summary:
+    model: 'deepseek/deepseek-v4-flash'
+    reasoning: 'off'
+  split:
+    model: 'deepseek/deepseek-v4-flash'
+    reasoning: 'low' # auto, off, low, medium, high, xhigh
+  translate:
+    model: 'deepseek/deepseek-v4-flash'
+    reasoning: 'low'
+  hard_translation:
+    enabled: true
+    model: 'deepseek/deepseek-v4-flash'
+    reasoning: 'high'
+    max_ratio: 0.10
+    min_score: 3.0
+  proofread:
+    model: 'deepseek/deepseek-v4-flash'
+    reasoning: 'high'
+    only_risky: true
 # *Number of LLM multi-threaded accesses, set to 1 if using local LLM
 max_workers: 1
 
@@ -90,7 +115,7 @@ translation_chunk_lines: 12
 max_split_length: 20
 
 # *Whether to reflect the translation result in the original text
-reflect_translate: true
+reflect_translate: false
 
 # LLM proofreading for translation_results.xlsx before manual review
 llm_proofread:

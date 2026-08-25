@@ -4,6 +4,7 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 from core.utils import *
+from core.utils.llm_stage_utils import stage_api_config
 console = Console()
 
 def _normalize_item(item, required_sub_keys):
@@ -61,6 +62,7 @@ def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_
 
     # Retry translation if the length of the original text and the translated text are not the same, or if the specified key is missing
     def retry_translation(prompt, length, step_name):
+        api_config = stage_api_config("translate")
         def valid_faith(response_data):
             return valid_translate_result(response_data, [str(i) for i in range(1, length+1)], ['direct'])
         def valid_express(response_data):
@@ -69,9 +71,9 @@ def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_
             required_sub_keys = ['direct'] if step_name == 'faithfulness' else ['free']
             validator = valid_faith if step_name == 'faithfulness' else valid_express
             if step_name == 'faithfulness':
-                result = ask_gpt(prompt+retry* " ", resp_type='json', log_title=f'translate_{step_name}')
+                result = ask_gpt(prompt+retry* " ", resp_type='json', log_title=f'translate_{step_name}', api_config=api_config)
             elif step_name == 'expressiveness':
-                result = ask_gpt(prompt+retry* " ", resp_type='json', log_title=f'translate_{step_name}')
+                result = ask_gpt(prompt+retry* " ", resp_type='json', log_title=f'translate_{step_name}', api_config=api_config)
             result = normalize_translate_result(result, required_sub_keys)
             valid_resp = validator(result)
             if valid_resp['status'] == 'success' and len(lines.split('\n')) == len(result):

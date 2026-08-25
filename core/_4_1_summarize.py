@@ -2,6 +2,7 @@ import json
 from core.prompts import get_summary_prompt
 import pandas as pd
 from core.utils import *
+from core.utils.llm_stage_utils import stage_api_config
 from core.utils.models import _3_2_SPLIT_BY_MEANING, _4_1_TERMINOLOGY
 
 CUSTOM_TERMS_PATH = 'custom_terms.xlsx'
@@ -59,7 +60,10 @@ def get_summary():
                 return {"status": "error", "message": "Invalid response format"}   
         return {"status": "success", "message": "Summary completed"}
 
-    summary = ask_gpt(summary_prompt, resp_type='json', valid_def=valid_summary, log_title='summary')
+    summary = ask_gpt(
+        summary_prompt, resp_type='json', valid_def=valid_summary,
+        log_title='summary', api_config=stage_api_config("summary")
+    )
     summary['terms'].extend(custom_terms_json['terms'])
     
     with open(_4_1_TERMINOLOGY, 'w', encoding='utf-8') as f:

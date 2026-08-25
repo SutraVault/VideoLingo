@@ -11,8 +11,89 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from difflib import SequenceMatcher
 from core.utils.models import *
+from core.utils.llm_stage_utils import (
+    risky_row_indices,
+    sentence_risk_score,
+    stage_api_config,
+    staged_llm_enabled,
+)
 console = Console()
 SOURCE_SUBTITLE_PATH = "output/source_subtitle.srt"
+
+
+def _valid_hard_translation(expected_ids):
+    def validate(result):
+        if not isinstance(result, dict):
+            return {'status': 'error', 'message': 'Response must be a JSON object'}
+        for item_id in expected_ids:
+            item = result.get(item_id)
+            if not isinstance(item, dict) or not str(item.get('translation', '')).strip():
+                return {'status': 'error', 'message': f'Missing translation for id {item_id}'}
+        return {'status': 'success', 'message': ''}
+    return validate
+
+
+def _refine_hard_translations(df):
+    """Re-translate only the highest-risk rows with the configured hard stage."""
+    if not staged_llm_enabled() or not load_key("llm_stages.hard_translation.enabled"):
+        return df
+    max_ratio = float(load_key("llm_stages.hard_translation.max_ratio"))
+    min_score = float(load_key("llm_stages.hard_translation.min_score"))
+    indices = risky_row_indices(df, max_ratio=max_ratio, min_score=min_score)
+    if not indices:
+        console.print("[green]No high-risk translation rows required a thinking pass.[/green]")
+        return df
+
+    output = df.copy()
+    output["Initial Translation"] = output["Translation"]
+    output["Translation Risk Score"] = output.apply(
+        lambda row: sentence_risk_score(row.get("Source", ""), row.get("Translation", "")),
+        axis=1,
+    )
+    output["Hard Translation Applied"] = False
+    api_config = stage_api_config("hard_translation")
+    console.print(f"[cyan]Thinking pass selected {len(indices)}/{len(df)} high-risk rows.[/cyan]")
+    for start in range(0, len(indices), 5):
+        batch_indices = indices[start:start + 5]
+        items = []
+        for index in batch_indices:
+            row = output.loc[index]
+            position = output.index.get_loc(index)
+            items.append({
+                "id": str(index),
+                "source": str(row["Source"]),
+                "current_translation": str(row["Translation"]),
+                "risk_score": sentence_risk_score(row["Source"], row["Translation"]),
+                "previous_source": str(output.iloc[position - 1]["Source"]) if position > 0 else "",
+                "next_source": str(output.iloc[position + 1]["Source"]) if position + 1 < len(output) else "",
+            })
+        expected_ids = [item["id"] for item in items]
+        template = {item_id: {"translation": "best concise translation"} for item_id in expected_ids}
+        prompt = f"""
+You are the difficult-line translation specialist in a subtitle pipeline.
+Re-evaluate each source line using its context. Correct mistranslation, omission,
+unsupported additions, ambiguous references, terminology, names, numbers, and units.
+Keep documentary narration natural, concise, and suitable for spoken dubbing.
+If the current translation is already correct, return it unchanged. Do not merge,
+split, add, delete, or reorder rows. Output JSON only.
+
+Input:
+{json.dumps(items, ensure_ascii=False)}
+
+Output shape:
+{json.dumps(template, ensure_ascii=False, separators=(',', ':'))}
+""".strip()
+        result = ask_gpt(
+            prompt,
+            resp_type="json",
+            valid_def=_valid_hard_translation(expected_ids),
+            log_title="translate_hard",
+            api_config=api_config,
+        )
+        for index in batch_indices:
+            output.at[index, "Translation"] = str(result[str(index)]["translation"]).replace("\n", " ").strip()
+            output.at[index, "Hard Translation Applied"] = True
+    return output
 
 # Function to split text into chunks
 def split_chunks_by_chars(chunk_size, max_i): 
@@ -174,6 +255,7 @@ def translate_all():
         df_text = pd.read_excel(_2_CLEANED_CHUNKS)
         df_text['text'] = df_text['text'].str.strip('"').str.strip()
         df_time = align_timestamp(df_text, df_translate, subtitle_output_configs, output_dir=None, for_display=False)
+    df_time = _refine_hard_translations(df_time)
     console.print(df_time)
     # apply check_len_then_trim to df_time['Translation'], only when duration > MIN_TRIM_DURATION.
     df_time['Translation'] = df_time.apply(lambda x: check_len_then_trim(x['Translation'], x['duration']) if x['duration'] > load_key("min_trim_duration") else x['Translation'], axis=1)

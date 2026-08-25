@@ -104,7 +104,7 @@ def _write_usage_logs(event):
     with open(summary_file, 'w', encoding='utf-8') as f:
         json.dump(summary, f, ensure_ascii=False, indent=4)
 
-def _save_cache(model, prompt, resp_content, resp_type, resp, message=None, log_title="default", usage=None, base_url=None):
+def _save_cache(model, prompt, resp_content, resp_type, resp, message=None, log_title="default", usage=None, base_url=None, request_variant=None):
     with LOCK:
         logs = []
         file = os.path.join(GPT_LOG_FOLDER, f"{log_title}.json")
@@ -113,12 +113,12 @@ def _save_cache(model, prompt, resp_content, resp_type, resp, message=None, log_
             with open(file, 'r', encoding='utf-8') as f:
                 logs = json.load(f)
         usage = _to_plain_dict(usage)
-        logs.append({"model": model, "base_url": base_url, "prompt": prompt, "resp_content": resp_content, "resp_type": resp_type, "resp": resp, "message": message, "usage": usage})
+        logs.append({"model": model, "base_url": base_url, "request_variant": request_variant, "prompt": prompt, "resp_content": resp_content, "resp_type": resp_type, "resp": resp, "message": message, "usage": usage})
         with open(file, 'w', encoding='utf-8') as f:
             json.dump(logs, f, ensure_ascii=False, indent=4)
         _write_usage_logs(_usage_event(model, prompt, resp_content, resp_type, usage, log_title))
 
-def _load_cache(prompt, resp_type, log_title, model=None, base_url=None):
+def _load_cache(prompt, resp_type, log_title, model=None, base_url=None, request_variant=None):
     with LOCK:
         file = os.path.join(GPT_LOG_FOLDER, f"{log_title}.json")
         if os.path.exists(file):
@@ -128,6 +128,8 @@ def _load_cache(prompt, resp_type, log_title, model=None, base_url=None):
                         if model and item.get("model") and item.get("model") != model:
                             continue
                         if base_url and item.get("base_url") and item.get("base_url") != base_url:
+                            continue
+                        if request_variant != item.get("request_variant"):
                             continue
                         return item["resp"]
         return False
@@ -156,9 +158,19 @@ def ask_gpt(
         base_url = "https://ark.cn-beijing.volces.com/api/v3" # huoshan base url
     elif 'v1' not in base_url:
         base_url = base_url.strip('/') + '/v1'
+    reasoning_config = api_config.get("reasoning")
+    if reasoning_config is None and api_config.get("inherit_reasoning", True):
+        reasoning_config = _load_optional_key("api.reasoning")
+    extra_body = dict(api_config.get("extra_body") or {})
+    if isinstance(reasoning_config, dict) and reasoning_config:
+        extra_body["reasoning"] = dict(reasoning_config)
+    request_variant = json.dumps(extra_body, sort_keys=True, ensure_ascii=False, default=str)
     # check cache after resolving the effective model and base URL
     if use_cache:
-        cached = _load_cache(prompt, resp_type, log_title, model=model, base_url=base_url)
+        cached = _load_cache(
+            prompt, resp_type, log_title, model=model, base_url=base_url,
+            request_variant=request_variant,
+        )
         if cached:
             if attempt_tracker is not None:
                 attempt_tracker["cache_hits"] = attempt_tracker.get("cache_hits", 0) + 1
@@ -170,13 +182,6 @@ def ask_gpt(
     if llm_support_json is None:
         llm_support_json = load_key("api.llm_support_json")
     response_format = {"type": "json_object"} if resp_type == "json" and llm_support_json else None
-    reasoning_config = api_config.get("reasoning")
-    if reasoning_config is None:
-        reasoning_config = _load_optional_key("api.reasoning")
-    extra_body = dict(api_config.get("extra_body") or {})
-    if reasoning_config:
-        extra_body["reasoning"] = dict(reasoning_config)
-
     messages = [{"role": "user", "content": prompt}]
 
     params = dict(
@@ -205,10 +210,10 @@ def ask_gpt(
         if valid_resp['status'] != 'success':
             if attempt_tracker is not None:
                 attempt_tracker["validation_errors"] = attempt_tracker.get("validation_errors", 0) + 1
-            _save_cache(model, prompt, resp_content, resp_type, resp, log_title="error", message=valid_resp['message'], usage=usage, base_url=base_url)
+            _save_cache(model, prompt, resp_content, resp_type, resp, log_title="error", message=valid_resp['message'], usage=usage, base_url=base_url, request_variant=request_variant)
             raise ValueError(f"❎ API response error: {valid_resp['message']}")
 
-    _save_cache(model, prompt, resp_content, resp_type, resp, log_title=log_title, usage=usage, base_url=base_url)
+    _save_cache(model, prompt, resp_content, resp_type, resp, log_title=log_title, usage=usage, base_url=base_url, request_variant=request_variant)
     return resp
 
 
