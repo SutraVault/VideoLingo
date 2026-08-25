@@ -3,6 +3,8 @@ import math
 import time
 import shutil
 import subprocess
+import threading
+from contextlib import contextmanager
 from typing import Tuple
 
 import pandas as pd
@@ -29,6 +31,62 @@ TEMP_FILE_TEMPLATE = f"{_AUDIO_TMP_DIR}/{{}}_temp.wav"
 OUTPUT_FILE_TEMPLATE = f"{_AUDIO_SEGS_DIR}/{{}}.wav"
 WARMUP_SIZE = 5
 MAX_CHUNK_TRUNCATE_OVERFLOW = 1.2
+TTS_GENERATION_LOCK = "output/log/tts_generation.lock"
+
+
+def _pid_is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError, ValueError):
+        return False
+
+
+@contextmanager
+def tts_generation_lock():
+    """Prevent duplicate Streamlit threads from generating into one cache."""
+    os.makedirs(os.path.dirname(TTS_GENERATION_LOCK), exist_ok=True)
+    for _ in range(2):
+        try:
+            fd = os.open(TTS_GENERATION_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode("ascii"))
+            os.close(fd)
+            break
+        except FileExistsError:
+            try:
+                with open(TTS_GENERATION_LOCK, encoding="ascii") as lock_file:
+                    owner_pid = int(lock_file.read().strip())
+            except (OSError, ValueError):
+                owner_pid = 0
+            if owner_pid and _pid_is_running(owner_pid):
+                raise RuntimeError(
+                    f"Another TTS generation task is already running in process {owner_pid}. "
+                    "Wait for it to finish instead of starting a duplicate task."
+                )
+            try:
+                os.remove(TTS_GENERATION_LOCK)
+            except FileNotFoundError:
+                pass
+    else:
+        raise RuntimeError("Unable to acquire the TTS generation lock")
+    try:
+        yield
+    finally:
+        try:
+            os.remove(TTS_GENERATION_LOCK)
+        except FileNotFoundError:
+            pass
+
+
+def save_audio_tasks(tasks_df: pd.DataFrame) -> None:
+    """Atomically replace the task workbook so readers never see a partial ZIP."""
+    temp_path = f"{_8_1_AUDIO_TASK}.{os.getpid()}.{threading.get_ident()}.tmp.xlsx"
+    try:
+        tasks_df.to_excel(temp_path, index=False)
+        os.replace(temp_path, _8_1_AUDIO_TASK)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 
 def _silence_cleanup_settings() -> dict:
@@ -436,7 +494,7 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
     max_speed = load_key("speed_factor.max")
     tasks_df = refresh_cached_tts_durations(tasks_df)
     tasks_df = regenerate_oversized_indextts_rows(tasks_df, max_speed)
-    tasks_df.to_excel(_8_1_AUDIO_TASK, index=False)
+    save_audio_tasks(tasks_df)
     tasks_df = split_oversized_chunks(tasks_df, accept, min_speed, max_speed)
     chunk_start = 0
     
@@ -521,7 +579,7 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
     rprint("[bold green]✅ Audio chunks processing completed![/bold green]")
     return tasks_df
 
-def gen_audio() -> None:
+def _gen_audio_unlocked() -> None:
     """Main function: Generate audio and process timeline"""
     rprint("[bold magenta]🚀 Starting audio generation process...[/bold magenta]")
     
@@ -539,15 +597,20 @@ def gen_audio() -> None:
     else:
         with timed_step("TTS audio generation", category="detail"):
             tasks_df = generate_tts_audio(tasks_df)
-        tasks_df.to_excel(_8_1_AUDIO_TASK, index=False)
+        save_audio_tasks(tasks_df)
     
     # 🔄 Step4: Merge audio chunks
     with timed_step("Audio speed adjustment and chunk merge", category="detail"):
         tasks_df = merge_chunks(tasks_df)
     
     # 💾 Step5: Save results
-    tasks_df.to_excel(_8_1_AUDIO_TASK, index=False)
+    save_audio_tasks(tasks_df)
     rprint("[bold green]🎉 Audio generation completed successfully![/bold green]")
+
+
+def gen_audio() -> None:
+    with tts_generation_lock():
+        _gen_audio_unlocked()
 
 if __name__ == "__main__":
     gen_audio()

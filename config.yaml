@@ -136,7 +136,7 @@ pause_before_translate: false
 pause_after_translate: true
 
 # Whether to automatically start dubbing after subtitle processing completes
-auto_start_dubbing_after_subtitles: true
+auto_start_dubbing_after_subtitles: false
 
 ## ======================== Dubbing Settings ======================== ##
 # TTS selection [sf_fish_tts, openai_tts, gpt_sovits, indextts, azure_tts, fish_tts, edge_tts, custom_tts]
