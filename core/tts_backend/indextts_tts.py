@@ -236,10 +236,23 @@ def _shared_reference_audio(settings, current_dir):
     fallback = current_dir / "output/audio/refers/1.wav"
     _ensure_reference_audio(fallback)
 
+    # IndexTTS2 is highly sensitive to prompt cadence. Preserve its original
+    # VideoLingo behavior: use the first extracted reference even when it is
+    # shorter than the newer IndexTTS2.5 recommendation. In this project the
+    # automatic switch from 1.wav to 3.wav expanded an identical line from
+    # 2.83s to 8.66s and copied long pauses into most generated speech.
+    if str(settings.get("version", "2")) == "2":
+        return fallback
+
     refers_dir = fallback.parent
     min_duration = float(settings.get("min_refer_duration", 0) or 0)
     max_duration = float(settings.get("max_refer_duration", 0) or 0)
-    cache_key = (str(refers_dir.resolve()), min_duration, max_duration)
+    cache_key = (
+        str(settings.get("version", "2.5")),
+        str(refers_dir.resolve()),
+        min_duration,
+        max_duration,
+    )
     cached_path = _SHARED_REFERENCE_CACHE.get(cache_key)
     if cached_path is not None and cached_path.exists():
         return cached_path
