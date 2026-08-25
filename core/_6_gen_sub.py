@@ -44,6 +44,23 @@ def safe_text(value):
         return ''
     return str(value)
 
+
+def restore_reviewed_audio_translations(df_remerged, df_reviewed):
+    """Prefer reviewed wording when remerged rows map exactly to reviewed rows."""
+    output = df_remerged.copy()
+    if len(output) != len(df_reviewed):
+        return output
+    remerged_source = output['Source'].apply(safe_text).str.strip()
+    reviewed_source = df_reviewed['Source'].apply(safe_text).str.strip()
+    matches = remerged_source == reviewed_source
+    if matches.any():
+        output.loc[matches, 'Translation'] = df_reviewed.loc[matches, 'Translation'].apply(safe_text)
+        console.print(
+            f"[green]Restored {int(matches.sum())} reviewed translations for TTS "
+            "to avoid word-internal spaces from subtitle remerging.[/green]"
+        )
+    return output
+
 def show_difference(str1, str2):
     """Show the difference positions between two strings"""
     min_len = min(len(str1), len(str2))
@@ -333,6 +350,9 @@ def align_timestamp_main():
 
     # for audio
     df_translate_for_audio = pd.read_excel(_5_REMERGED) # use remerged file to avoid unmatched lines when dubbing
+    df_translate_for_audio = restore_reviewed_audio_translations(
+        df_translate_for_audio, df_reviewed
+    )
     df_translate_for_audio['Source'] = df_translate_for_audio['Source'].apply(safe_text)
     df_translate_for_audio['Translation'] = df_translate_for_audio['Translation'].apply(clean_translation)
     
@@ -345,6 +365,7 @@ def align_timestamp_main():
         AUDIO_SUBTITLE_OUTPUT_CONFIGS,
         _AUDIO_DIR,
         fallback_timestamps=audio_fallback_timestamps,
+        for_display=False,
     )
     console.print(Panel(f"[bold green]🎉📝 Audio subtitles generation completed! Please check in the `{_AUDIO_DIR}` folder 👀[/bold green]"))
     

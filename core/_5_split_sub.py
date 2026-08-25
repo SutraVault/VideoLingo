@@ -35,6 +35,19 @@ def safe_text(value) -> str:
         return ''
     return str(value)
 
+
+def translation_joiner(text: str) -> str:
+    """Choose a joiner from the translated text, not the source language."""
+    text = safe_text(text)
+    if any(
+        '\u3400' <= char <= '\u9fff'
+        or '\u3040' <= char <= '\u30ff'
+        or '\uac00' <= char <= '\ud7a3'
+        for char in text
+    ):
+        return ""
+    return " "
+
 # ! You can modify your own weights here
 # Chinese and Japanese 2.5 characters, Korean 2 characters, Thai 1.5 characters, full-width symbols 2 characters, other English-based and half-width symbols 1 character
 def calc_len(text: str) -> float:
@@ -149,9 +162,7 @@ def align_subs(
 
     tr_parts = normalize_align_data(parsed, tr_sub, src_parts)
     
-    whisper_language = load_key("whisper.language")
-    language = load_key("whisper.detected_language") if whisper_language == 'auto' else whisper_language
-    joiner = get_joiner(language)
+    joiner = translation_joiner(tr_sub)
     tr_remerged = joiner.join(tr_parts)
     
     table = Table(title="🔗 Aligned parts")
