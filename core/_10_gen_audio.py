@@ -330,6 +330,35 @@ def can_reuse_generated_tts(tasks_df: pd.DataFrame) -> bool:
     return True
 
 
+def refresh_cached_tts_durations(tasks_df: pd.DataFrame) -> pd.DataFrame:
+    """Reconcile workbook duration metadata with the cached WAV files."""
+    tasks_df = tasks_df.copy()
+    repaired = []
+    for index, row in tasks_df.iterrows():
+        lines = eval(row['lines']) if isinstance(row['lines'], str) else row['lines']
+        durations = []
+        for line_index in range(len(lines)):
+            temp_file = TEMP_FILE_TEMPLATE.format(f"{row['number']}_{line_index}")
+            if not os.path.exists(temp_file):
+                durations = []
+                break
+            durations.append(get_audio_duration(temp_file))
+        if not durations:
+            continue
+        actual_duration = sum(durations)
+        recorded_duration = float(row.get('real_dur', 0) or 0)
+        if abs(actual_duration - recorded_duration) > 0.02:
+            tasks_df.at[index, 'real_dur'] = actual_duration
+            repaired.append((row['number'], recorded_duration, actual_duration))
+    if repaired:
+        details = ", ".join(
+            f"{number}: {old:.3f}s→{new:.3f}s" for number, old, new in repaired[:8]
+        )
+        suffix = f" and {len(repaired) - 8} more" if len(repaired) > 8 else ""
+        rprint(f"[yellow]Repaired cached TTS duration metadata ({details}{suffix}).[/yellow]")
+    return tasks_df
+
+
 def regenerate_oversized_indextts_rows(tasks_df: pd.DataFrame, max_speed: float) -> pd.DataFrame:
     """Regenerate only cached IndexTTS2.5 rows that cannot fit at max_speed."""
     if load_key("tts_method") != "indextts" or str(load_key("indextts.version")) != "2.5":
@@ -405,6 +434,7 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
     accept = load_key("speed_factor.accept")
     min_speed = load_key("speed_factor.min")
     max_speed = load_key("speed_factor.max")
+    tasks_df = refresh_cached_tts_durations(tasks_df)
     tasks_df = regenerate_oversized_indextts_rows(tasks_df, max_speed)
     tasks_df.to_excel(_8_1_AUDIO_TASK, index=False)
     tasks_df = split_oversized_chunks(tasks_df, accept, min_speed, max_speed)
