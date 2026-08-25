@@ -269,7 +269,8 @@ def clean_translation(x):
     if pd.isna(x):
         return ''
     cleaned = str(x).strip('。').strip('，')
-    return autocorrect.format(cleaned)
+    formatted = autocorrect.format(cleaned)
+    return re.sub(r'(?<=\d)\s+(?=\d)', '', formatted)
 
 def _parse_srt_timestamp(value):
     """Return an SRT timestamp cell as a pair of seconds."""

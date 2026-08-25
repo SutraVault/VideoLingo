@@ -16,6 +16,12 @@ TRANS_SUBS_FOR_AUDIO_FILE = 'output/audio/trans_subs_for_audio.srt'
 SRC_SUBS_FOR_AUDIO_FILE = 'output/audio/src_subs_for_audio.srt'
 ESTIMATOR = None
 
+
+def normalize_tts_text(text):
+    """Remove accidental whitespace inside numbers without changing word spacing."""
+    text = str(text or "")
+    return re.sub(r'(?<=\d)\s+(?=\d)', '', text)
+
 def check_len_then_trim(text, duration):
     global ESTIMATOR
     if ESTIMATOR is None:
@@ -86,6 +92,7 @@ def process_srt():
             end_time = datetime.datetime.strptime(end_time, '%H:%M:%S,%f').time()
             duration = time_diff_seconds(start_time, end_time, datetime.date.today())
             text = ' '.join(lines[2:])
+            text = normalize_tts_text(text)
             # Remove content within parentheses (including English and Chinese parentheses)
             text = re.sub(r'\([^)]*\)', '', text).strip()
             text = re.sub(r'（[^）]*）', '', text).strip()
