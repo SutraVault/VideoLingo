@@ -368,12 +368,16 @@ def _task_control_panel(runner_key: str):
             kind="error",
         )
         st.error(f"❌ {t('Task error')}: {runner.error_msg}")
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
+            if st.button(t("Retry Failed Step"), key=f"{runner_key}_retry_error", width="stretch"):
+                runner.retry_from_failed_step()
+                st.rerun(scope="app")
+        with col2:
             if st.button(t("OK"), key=f"{runner_key}_ack_error", width="stretch"):
                 runner.reset()
                 st.rerun(scope="app")
-        with col2:
+        with col3:
             if st.button(t("Reset Task State"), key=f"{runner_key}_reset_error", width="stretch"):
                 runner.reset()
                 st.rerun(scope="app")

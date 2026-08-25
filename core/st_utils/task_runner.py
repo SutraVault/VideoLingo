@@ -109,6 +109,14 @@ class TaskRunner:
             self._steps = []
             self._run_id = None
 
+    def retry_from_failed_step(self):
+        """Retry the failed step and all later steps without repeating completed work."""
+        if self.state != "error" or not self._steps:
+            return
+        failed_index = max(0, self.current_step)
+        remaining_steps = self._steps[failed_index:]
+        self.start(remaining_steps, run_label="Retry failed task")
+
     @property
     def is_active(self) -> bool:
         return self.state in ("running", "paused")

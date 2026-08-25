@@ -89,6 +89,7 @@
     "Start Audio Processing": "Start Audio Processing",
     "Audio processing is complete! You can check the audio files in the `output` folder.": "Audio processing is complete! You can check the audio files in the `output` folder.",
     "Delete dubbing files": "Delete dubbing files",
+    "Retry Failed Step": "Retry Failed Step",
     "Generate audio tasks": "Generate audio tasks",
     "Extract refer audio": "Extract refer audio",
     "Generate all audio": "Generate all audio",
