@@ -17,7 +17,7 @@ def except_handler(error_msg, retry=0, delay=1, default_return=None):
                     return func(*args, **kwargs)
                 except Exception as e:
                     last_exception = e
-                    rprint(f"[red]{error_msg}: {e}, retry: {i+1}/{retry}[/red]")
+                    rprint(f"[red]{error_msg}: {e}, attempt: {i+1}/{retry+1}[/red]")
                     if i == retry:
                         if default_return is not None:
                             return default_return
