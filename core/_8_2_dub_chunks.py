@@ -2,7 +2,7 @@ import datetime
 import os
 import re
 import pandas as pd
-from core._8_1_audio_task import time_diff_seconds
+from core._8_1_audio_task import normalize_tts_text, time_diff_seconds
 from core.asr_backend.audio_preprocess import convert_video_to_audio, get_audio_duration
 from core._1_ytdlp import find_video_files
 from core.tts_backend.estimate_duration import init_estimator, estimate_duration
@@ -197,6 +197,11 @@ def gen_dub_chunks():
         if len(lines) >= 3:
             text = ' '.join(lines[2:])
             text = re.sub(r'\([^)]*\)|（[^）]*）', '', text).strip().replace('-', '')
+            # Keep the final per-line TTS payload consistent with the normalized
+            # task text. Without this, rebuilding chunks restores raw digits
+            # from the SRT (for example, 1984) after process_srt() converted the
+            # same year to digit-wise Chinese speech.
+            text = normalize_tts_text(text)
             content_lines.append(text)
             
     # Process source subtitles (same structure)

@@ -18,7 +18,7 @@ ESTIMATOR = None
 
 
 def normalize_tts_text(text):
-    """Repair numeric spacing and make standalone four-digit years read digit-wise."""
+    """Repair numeric spacing and read Chinese four-digit years digit-wise."""
     text = str(text or "")
     text = re.sub(r'(?<=\d)\s+(?=\d)', '', text)
     try:
@@ -33,9 +33,11 @@ def normalize_tts_text(text):
     def replace_year(match):
         return match.group(1).translate(digit_names)
 
-    # Exclude model names such as M1918/A1917 and longer numeric identifiers.
+    # Require the Chinese year suffix so standards such as "1913 导轨" stay
+    # cardinal numbers. Also exclude model names such as M1918/A1917 and
+    # longer numeric identifiers.
     return re.sub(
-        r'(?<![A-Za-z0-9])((?:1[0-9]|20)[0-9]{2})(?![A-Za-z0-9])',
+        r'(?<![A-Za-z0-9])((?:1[0-9]|20)[0-9]{2})(?![A-Za-z0-9])(?=\s*年)',
         replace_year,
         text,
     )
