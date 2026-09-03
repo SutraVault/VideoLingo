@@ -10,43 +10,26 @@ def get_split_prompt(sentence, num_parts = 2, word_limit = 20):
 You are a professional Netflix subtitle splitter in **{language}**.
 
 ## Task
-Split the given subtitle text into **{num_parts}** parts, each less than **{word_limit}** words.
+Insert **{num_parts - 1}** `[br]` separator(s) so the subtitle becomes exactly
+**{num_parts}** parts, each no more than **{word_limit}** words.
 
-1. Maintain sentence meaning coherence according to Netflix subtitle standards
-2. MOST IMPORTANT: Keep parts roughly equal in length (minimum 3 words each)
-3. Split at natural points like punctuation marks or conjunctions
-4. If provided text is repeated words, simply split at the middle of the repeated words.
-
-## Steps
-1. Analyze the sentence structure, complexity, and key splitting challenges
-2. Generate two alternative splitting approaches with [br] tags at split positions
-3. Compare both approaches highlighting their strengths and weaknesses
-4. Choose the best splitting approach
+1. Preserve every original word in its original order; do not rewrite, add, or remove text.
+2. Prefer natural boundaries such as punctuation, clauses, or conjunctions.
+3. Keep parts reasonably balanced, with at least 3 words per part when possible.
+4. If the input repeats words, split near the middle of the repetition.
 
 ## Given Text
 <split_this_sentence>
 {sentence}
 </split_this_sentence>
 
-## Output in only JSON format and no other text
-```json
+## Output
+Return only this JSON object, with no analysis, alternatives, or Markdown fences:
 {{
-    "analysis": "Brief description of sentence structure, complexity, and key splitting challenges",
-    "split1": "First splitting approach with [br] tags at split positions",
-    "split2": "Alternative splitting approach with [br] tags at split positions",
-    "assess": "Comparison of both approaches highlighting their strengths and weaknesses",
-    "choice": "1 or 2"
+    "split": "The complete original subtitle with [br] separator(s) inserted"
 }}
-```
-
-Note: Start you answer with ```json and end with ```, do not add any other text.
 """.strip()
     return split_prompt
-
-"""{{
-    "analysis": "Brief analysis of the text structure",
-    "split": "Complete sentence with [br] tags at split positions"
-}}"""
 
 ## ================================================================
 # @ step4_1_summarize.py

@@ -9,6 +9,7 @@ import time
 from core._3_2_split_meaning import split_sentence
 from core.prompts import get_align_prompt
 from core.utils.excel_utils import read_excel_with_aliases
+from core.utils.llm_stage_utils import stage_api_config
 from rich.panel import Panel
 from rich.console import Console
 from rich.table import Table
@@ -163,6 +164,7 @@ def align_subs(
             valid_def=valid_align,
             log_title='align_subs_v2',
             attempt_tracker=attempt_tracker,
+            api_config=stage_api_config("split"),
         )
     except Exception as e:
         console.print(

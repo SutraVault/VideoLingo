@@ -28,7 +28,7 @@ llm_stages:
     reasoning: 'off'
   split:
     model: 'deepseek/deepseek-v4-flash'
-    reasoning: 'low' # auto, off, low, medium, high, xhigh
+    reasoning: 'off' # auto, off, low, medium, high, xhigh
   translate:
     model: 'deepseek/deepseek-v4-flash'
     reasoning: 'low'
