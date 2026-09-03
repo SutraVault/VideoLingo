@@ -40,8 +40,8 @@ llm_stages:
     min_score: 3.0
   proofread:
     model: 'deepseek/deepseek-v4-flash'
-    reasoning: 'high'
-    only_risky: true
+    reasoning: 'medium'
+    only_risky: false
 # *Number of LLM multi-threaded accesses, set to 1 if using local LLM
 max_workers: 1
 
@@ -121,7 +121,9 @@ reflect_translate: false
 llm_proofread:
   enabled: true
   mode: "suggest" # suggest: add LLM Proofread column; apply: replace Translation
-  chunk_lines: 7
+  chunk_lines: 7 # Soft batch target; complete sentence spans may exceed this.
+  context_lines: 4 # Read-only rows on each side, extended to sentence boundaries.
+  max_sentence_lines: 28 # Safety cap when source punctuation is missing.
   override_api: true
   api:
     key: 'your_proofread_api_key'

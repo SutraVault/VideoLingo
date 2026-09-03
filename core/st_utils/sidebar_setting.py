@@ -413,10 +413,13 @@ def page_setting():
                 max_value=100,
                 value=int(load_key("llm_proofread.chunk_lines")),
                 step=5,
-                help=t("More lines reduce repeated prompt tokens, but require a stronger model."),
+                help="连续校对行数的目标值；为保留完整句子可超出。每批另带前后文，风险筛选会扩展到完整句子。",
             )
             if proofread_chunk_lines != load_key("llm_proofread.chunk_lines"):
                 update_key("llm_proofread.chunk_lines", int(proofread_chunk_lines))
+
+            st.caption("校对附带前后文参考（默认各 4 行，可在 config.yaml 的 llm_proofread.context_lines 调整）；允许同一语义段内跨行调整译文，保留字幕 ID 和时间轴。")
+            st.caption("校对表新增 Proofread Status / Issues / Reason，记录模型判定、问题类型及原因。needs_review 表示需人工确认；not_reviewed 表示未送审。已有结果需点击“重新运行 LLM 校对”更新。")
 
             proofread_override_api = st.toggle(
                 t("Override LLM for Proofread"),
