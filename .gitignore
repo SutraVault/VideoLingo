@@ -173,3 +173,5 @@ runtime/
 dev/
 installer_files/
 logs/
+# Installed JavaScript dependencies
+node_modules/
