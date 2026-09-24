@@ -40,10 +40,10 @@ llm_stages:
     min_score: 3.0
   proofread:
     model: 'deepseek/deepseek-v4-flash'
-    reasoning: 'medium'
-    only_risky: false
+    reasoning: 'low'
+    only_risky: true
 # *Number of LLM multi-threaded accesses, set to 1 if using local LLM
-max_workers: 3
+max_workers: 5
 
 # Language settings, written into the prompt, can be described in natural language
 target_language: '简体中文'
@@ -85,7 +85,7 @@ watermark:
   text: ' 译制：jlcaudemars@B站'
   position: 'top_right'
   opacity: 0.45
-  font_size: 20
+  font_size: 28
 
 ## ======================== Advanced Settings ======================== ##
 # *🔬 h264_nvenc GPU acceleration for ffmpeg, make sure your GPU supports it
@@ -125,8 +125,8 @@ reflect_translate: false
 
 # LLM proofreading for translation_results.xlsx before manual review
 llm_proofread:
-  enabled: true
-  mode: "suggest" # suggest: add LLM Proofread column; apply: replace Translation
+  enabled: false
+  mode: "apply"   # suggest: add LLM Proofread column; apply: replace Translation
   chunk_lines: 7 # Soft batch target; complete sentence spans may exceed this.
   context_lines: 4 # Read-only rows on each side, extended to sentence boundaries.
   max_sentence_lines: 28 # Safety cap when source punctuation is missing.
@@ -186,7 +186,7 @@ sf_cosyvoice2:
 
 # Edge TTS configuration
 edge_tts:
-  voice: 'zh-CN-YunjianNeural'
+  voice: 'zh-CN-YunxiNeural'
 
 # Local fixed-voice Kokoro TTS (no reference audio or API key)
 kokoro_tts:
