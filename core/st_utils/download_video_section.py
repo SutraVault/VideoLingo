@@ -6,6 +6,7 @@ from time import sleep
 
 import streamlit as st
 from core._1_ytdlp import download_video_ytdlp, find_video_files
+from core.utils.srt_import import import_srt_to_cleaned_chunks
 from core.utils import *
 from translations.translations import translate as t
 
@@ -46,6 +47,14 @@ def download_video_section():
         try:
             video_file = find_video_files()
             st.video(video_file)
+            subtitle_notice = st.session_state.pop(
+                "youtube_creator_subtitle_notice", None
+            )
+            if subtitle_notice:
+                if os.path.exists("output/source_subtitle.srt"):
+                    st.success(subtitle_notice)
+                else:
+                    st.info(subtitle_notice)
             if st.button(t("Delete and Reselect"), key="delete_video_button"):
                 os.remove(video_file)
                 clear_output_dir()
@@ -67,11 +76,40 @@ def download_video_section():
                 default_idx = list(res_dict.values()).index(target_res) if target_res in res_dict.values() else 0
                 res_display = st.selectbox(t("Resolution"), options=res_options, index=default_idx)
                 res = res_dict[res_display]
+            prefer_creator_subtitles = st.checkbox(
+                "Prefer uploader-provided YouTube subtitles",
+                value=True,
+                help=(
+                    "Uses the creator/uploaded subtitle track for the configured "
+                    "source language and skips WhisperX. Automatic captions are "
+                    "not treated as creator subtitles."
+                ),
+            )
             if st.button(t("Download Video"), key="download_button", width="stretch"):
                 if url:
                     with st.spinner("Downloading video..."):
                         try:
-                            download_video_ytdlp(url, resolution=res)
+                            result = download_video_ytdlp(
+                                url,
+                                resolution=res,
+                                prefer_creator_subtitles=prefer_creator_subtitles,
+                                subtitle_language=load_key("whisper.language"),
+                            )
+                            subtitle = result.get("creator_subtitle") if result else None
+                            if subtitle:
+                                with open(subtitle["path"], "r", encoding="utf-8-sig") as file:
+                                    content = file.read()
+                                _, subtitle_count, word_count = import_srt_to_cleaned_chunks(content)
+                                st.session_state["youtube_creator_subtitle_notice"] = (
+                                    f"Using uploader-provided YouTube subtitles "
+                                    f"({subtitle['language']}): {subtitle_count} blocks, "
+                                    f"{word_count} timed words. WhisperX will be skipped."
+                                )
+                            elif prefer_creator_subtitles:
+                                st.session_state["youtube_creator_subtitle_notice"] = (
+                                    "No uploader-provided subtitle matched the configured "
+                                    "source language. WhisperX will be used."
+                                )
                         except Exception as e:
                             st.error(str(e))
                             return False
