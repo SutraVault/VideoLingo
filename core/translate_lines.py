@@ -9,7 +9,7 @@ console = Console()
 
 def _normalize_item(item, required_sub_keys):
     if not isinstance(item, dict):
-        return {required_sub_keys[0]: str(item)}
+        return {required_sub_keys[0]: item}
     normalized = dict(item)
     for sub_key in required_sub_keys:
         if sub_key in normalized:
@@ -31,13 +31,17 @@ def normalize_translate_result(result, required_sub_keys: list):
     normalized = {}
     if isinstance(result, list):
         for index, item in enumerate(result, 1):
-            key = str(index)
+            key = str(item.get("id", index)).strip() if isinstance(item, dict) else str(index)
+            if key in normalized:
+                return {}
             normalized[key] = _normalize_item(item, required_sub_keys)
         return normalized
 
     if isinstance(result, dict):
         for key, item in result.items():
             normalized_key = str(key).strip()
+            if normalized_key in normalized:
+                return {}
             normalized[normalized_key] = _normalize_item(item, required_sub_keys)
         return normalized
 
@@ -46,13 +50,15 @@ def normalize_translate_result(result, required_sub_keys: list):
 def valid_translate_result(result, required_keys: list, required_sub_keys: list):
     result = normalize_translate_result(result, required_sub_keys)
     # Check for the required key
-    if not all(key in result for key in required_keys):
-        return {"status": "error", "message": f"Missing required key(s): {', '.join(set(required_keys) - set(result.keys()))}"}
+    if set(result) != set(required_keys):
+        return {"status": "error", "message": f"Return exactly these editable ids, no missing or extra rows: {required_keys}"}
     
     # Check for required sub-keys in all items
     for key in result:
         if not all(sub_key in result[key] for sub_key in required_sub_keys):
             return {"status": "error", "message": f"Missing required sub-key(s) in item {key}: {', '.join(set(required_sub_keys) - set(result[key].keys()))}"}
+        if any(not isinstance(result[key][sub_key], str) or not result[key][sub_key].strip() for sub_key in required_sub_keys):
+            return {"status": "error", "message": f"Every translation for id {key} must be a nonempty string."}
 
     return {"status": "success", "message": "Translation completed"}
 
@@ -63,24 +69,17 @@ def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_
     # Retry translation if the length of the original text and the translated text are not the same, or if the specified key is missing
     def retry_translation(prompt, length, step_name):
         api_config = stage_api_config("translate")
-        def valid_faith(response_data):
-            return valid_translate_result(response_data, [str(i) for i in range(1, length+1)], ['direct'])
-        def valid_express(response_data):
-            return valid_translate_result(response_data, [str(i) for i in range(1, length+1)], ['free'])
-        for retry in range(3):
-            required_sub_keys = ['direct'] if step_name == 'faithfulness' else ['free']
-            validator = valid_faith if step_name == 'faithfulness' else valid_express
-            if step_name == 'faithfulness':
-                result = ask_gpt(prompt+retry* " ", resp_type='json', log_title=f'translate_{step_name}', api_config=api_config)
-            elif step_name == 'expressiveness':
-                result = ask_gpt(prompt+retry* " ", resp_type='json', log_title=f'translate_{step_name}', api_config=api_config)
-            result = normalize_translate_result(result, required_sub_keys)
-            valid_resp = validator(result)
-            if valid_resp['status'] == 'success' and len(lines.split('\n')) == len(result):
-                return result
-            if retry != 2:
-                console.print(f"[yellow]⚠️ {step_name.capitalize()} translation of block {index} failed: {valid_resp['message']}. Retry...[/yellow]")
-        raise ValueError(f'[red]❌ {step_name.capitalize()} translation of block {index} failed after 3 retries. Please check `output/gpt_log/error.json` for more details.[/red]')
+        required_sub_keys = ['direct'] if step_name == 'faithfulness' else ['free']
+        def validator(response_data):
+            return valid_translate_result(response_data, [str(i) for i in range(1, length+1)], required_sub_keys)
+        # ask_gpt supplies actionable validation feedback and bounded retries.
+        result = ask_gpt(prompt, resp_type='json', log_title=f'translate_{step_name}',
+                         api_config=api_config, valid_def=validator)
+        result = normalize_translate_result(result, required_sub_keys)
+        valid_resp = validator(result)
+        if valid_resp['status'] != 'success':
+            raise ValueError(f"Invalid {step_name} block {index}: {valid_resp['message']}")
+        return result
 
     ## Step 1: Faithful to the Original Text
     prompt1 = get_prompt_faithfulness(lines, shared_prompt)

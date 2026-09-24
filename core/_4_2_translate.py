@@ -9,7 +9,12 @@ from core._6_gen_sub import align_timestamp
 from core.utils import *
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
-from difflib import SequenceMatcher
+from core.utils.proofread_context import proofreading_windows
+from core.utils.translation_context import (
+    split_translation_chunks, select_translation_context,
+    sentence_split_point, assemble_translation_results,
+    adjacent_duplicate_groups,
+)
 from core.utils.models import *
 from core.utils.llm_stage_utils import (
     risky_row_indices,
@@ -21,20 +26,29 @@ console = Console()
 SOURCE_SUBTITLE_PATH = "output/source_subtitle.srt"
 
 
+def _translation_setting(key, default):
+    try:
+        return load_key(key)
+    except KeyError:
+        return default
+
+
 def _valid_hard_translation(expected_ids):
     def validate(result):
         if not isinstance(result, dict):
             return {'status': 'error', 'message': 'Response must be a JSON object'}
+        if set(result) != set(expected_ids):
+            return {'status': 'error', 'message': 'Return exactly the editable ids, not context ids.'}
         for item_id in expected_ids:
             item = result.get(item_id)
-            if not isinstance(item, dict) or not str(item.get('translation', '')).strip():
+            if not isinstance(item, dict) or not isinstance(item.get('translation'), str) or not item['translation'].strip():
                 return {'status': 'error', 'message': f'Missing translation for id {item_id}'}
         return {'status': 'success', 'message': ''}
     return validate
 
 
 def _refine_hard_translations(df):
-    """Re-translate only the highest-risk rows with the configured hard stage."""
+    """Refine complete sentences containing risky rows, from an immutable draft."""
     if not staged_llm_enabled() or not load_key("llm_stages.hard_translation.enabled"):
         return df
     max_ratio = float(load_key("llm_stages.hard_translation.max_ratio"))
@@ -52,30 +66,43 @@ def _refine_hard_translations(df):
     )
     output["Hard Translation Applied"] = False
     api_config = stage_api_config("hard_translation")
-    console.print(f"[cyan]Thinking pass selected {len(indices)}/{len(df)} high-risk rows.[/cyan]")
-    for start in range(0, len(indices), 5):
-        batch_indices = indices[start:start + 5]
-        items = []
-        for index in batch_indices:
-            row = output.loc[index]
-            position = output.index.get_loc(index)
-            items.append({
-                "id": str(index),
-                "source": str(row["Source"]),
-                "current_translation": str(row["Translation"]),
-                "risk_score": sentence_risk_score(row["Source"], row["Translation"]),
-                "previous_source": str(output.iloc[position - 1]["Source"]) if position > 0 else "",
-                "next_source": str(output.iloc[position + 1]["Source"]) if position + 1 < len(output) else "",
-            })
+    rows = [{"id": str(position + 1), "source": str(row["Source"]),
+             "translation": str(row["Translation"])}
+            for position, (_, row) in enumerate(df.iterrows())]
+    windows = list(proofreading_windows(
+        rows, chunk_lines=5,
+        context_lines=int(_translation_setting("translation_context_lines", 4)),
+        selected_indices={df.index.get_loc(index) for index in indices},
+        max_sentence_lines=int(_translation_setting("translation_max_sentence_lines", 28)),
+    ))
+    console.print(f"[cyan]Thinking pass: {len(indices)} risk seeds expanded to {sum(len(w['rows']) for w in windows)}/{len(df)} rows.[/cyan]")
+    for window in windows:
+        items = window["rows"]
         expected_ids = [item["id"] for item in items]
         template = {item_id: {"translation": "best concise translation"} for item_id in expected_ids}
         prompt = f"""
 You are the difficult-line translation specialist in a subtitle pipeline.
-Re-evaluate each source line using its context. Correct mistranslation, omission,
+Re-evaluate each continuous source sentence using its context and the current draft. Correct mistranslation, omission,
 unsupported additions, ambiguous references, terminology, names, numbers, and units.
 Keep documentary narration natural, concise, and suitable for spoken dubbing.
 If the current translation is already correct, return it unchanged. Do not merge,
 split, add, delete, or reorder rows. Output JSON only.
+Judge the combined translation before modifying any row. If meaning was already
+moved between adjacent rows, do NOT translate that meaning a second time.
+Correct word senses rather than literal dictionary wording; a subtitle newline
+does not end a sentence. Fix broken clause order and detached punctuation.
+You may redistribute meaning between adjacent editable ids within the SAME
+semantic group, preserving each proposition exactly once and every row nonempty.
+Never redistribute meaning into/out of read-only context or other groups.
+
+Read-only context before:
+{json.dumps(window['context_before'], ensure_ascii=False)}
+
+Read-only context after:
+{json.dumps(window['context_after'], ensure_ascii=False)}
+
+Semantic groups of editable ids:
+{json.dumps(window['semantic_groups'])}
 
 Input:
 {json.dumps(items, ensure_ascii=False)}
@@ -90,37 +117,92 @@ Output shape:
             log_title="translate_hard",
             api_config=api_config,
         )
-        for index in batch_indices:
-            output.at[index, "Translation"] = str(result[str(index)]["translation"]).replace("\n", " ").strip()
-            output.at[index, "Hard Translation Applied"] = True
+        for item in items:
+            label = df.index[int(item["id"]) - 1]
+            output.at[label, "Translation"] = result[item["id"]]["translation"].replace("\n", " ").strip()
+            output.at[label, "Hard Translation Applied"] = True
+    return output
+
+
+def _repair_adjacent_duplicates(df):
+    """Repair sentence-local rows flagged by the deterministic overlap screen."""
+    output = df.copy()
+    output["Adjacent Duplicate Repaired"] = False
+    output["Adjacent Duplicate Signal"] = ""
+    if not bool(_translation_setting("translation_duplicate_audit.enabled", True)) or output.empty:
+        return output
+
+    sources = output["Source"].fillna("").astype(str).tolist()
+    translations = output["Translation"].fillna("").astype(str).tolist()
+    groups = adjacent_duplicate_groups(
+        sources,
+        translations,
+        min_phrase_chars=int(_translation_setting("translation_duplicate_audit.min_phrase_chars", 4)),
+        similarity_threshold=float(_translation_setting("translation_duplicate_audit.similarity_threshold", 0.72)),
+        max_sentence_lines=int(_translation_setting("translation_max_sentence_lines", 28)),
+    )
+    if not groups:
+        console.print("[green]Adjacent translation audit: no suspicious duplication found.[/green]")
+        return output
+
+    console.print(f"[yellow]Adjacent translation audit found {len(groups)} suspicious group(s); repairing before save.[/yellow]")
+    api_config = stage_api_config("hard_translation" if staged_llm_enabled() else "translate")
+    for group in groups:
+        start, end = group["start"], group["end"]
+        items = [
+            {"id": str(position + 1), "source": sources[position],
+             "current_translation": str(output.iloc[position]["Translation"])}
+            for position in range(start, end + 1)
+        ]
+        expected = [item["id"] for item in items]
+        prompt = f'''You are repairing adjacent subtitle translations after an automatic duplicate audit.
+Read the combined source passage, then rewrite the target rows so every source proposition appears exactly once.
+Remove duplicated or paraphrased meaning and duplicated numbers. Restore any source fact displaced by duplication.
+You may redistribute meaning only among these adjacent rows. Keep every id and every row non-empty.
+Use concise natural spoken subtitles. Output JSON only.
+
+Automatic signals: {json.dumps(group['reasons'], ensure_ascii=False)}
+Rows: {json.dumps(items, ensure_ascii=False)}
+Required shape: {json.dumps({item_id: {'translation': 'final text'} for item_id in expected}, ensure_ascii=False)}'''
+        result = ask_gpt(
+            prompt,
+            resp_type="json",
+            valid_def=_valid_hard_translation(expected),
+            log_title="translate_duplicate_repair",
+            api_config=api_config,
+        )
+        signal = "; ".join(group["reasons"])
+        for position in range(start, end + 1):
+            item_id = str(position + 1)
+            label = output.index[position]
+            output.at[label, "Translation"] = result[item_id]["translation"].replace("\n", " ").strip()
+            output.at[label, "Adjacent Duplicate Repaired"] = True
+            output.at[label, "Adjacent Duplicate Signal"] = signal
     return output
 
 # Function to split text into chunks
 def split_chunks_by_chars(chunk_size, max_i): 
-    """Split text into chunks based on character count, return a list of multi-line text chunks"""
+    """Keep sentence spans together; character and line limits are soft targets."""
     with open(_3_2_SPLIT_BY_MEANING, "r", encoding="utf-8") as file:
-        sentences = file.read().strip().split('\n')
-
-    chunks = []
-    chunk = ''
-    sentence_count = 0
-    for sentence in sentences:
-        if chunk and (len(chunk) + len(sentence + '\n') > chunk_size or sentence_count == max_i):
-            chunks.append(chunk.strip())
-            chunk = sentence + '\n'
-            sentence_count = 1
-        else:
-            chunk += sentence + '\n'
-            sentence_count += 1
-    if chunk.strip():
-        chunks.append(chunk.strip())
-    return chunks
+        sentences = file.read().strip().splitlines()
+    return split_translation_chunks(
+        sentences, chunk_chars=chunk_size, chunk_lines=max_i,
+        max_sentence_lines=int(_translation_setting("translation_max_sentence_lines", 28)),
+    )
 
 # Get context from surrounding chunks
 def get_previous_content(chunks, chunk_index):
-    return None if chunk_index == 0 else chunks[chunk_index - 1].split('\n')[-3:] # Get last 3 lines
+    before = [line for chunk in chunks[:chunk_index] for line in chunk.split('\n')]
+    return select_translation_context(
+        before, [], int(_translation_setting("translation_context_lines", 4)),
+        int(_translation_setting("translation_max_sentence_lines", 28)),
+    )[0]
 def get_after_content(chunks, chunk_index):
-    return None if chunk_index == len(chunks) - 1 else chunks[chunk_index + 1].split('\n')[:2] # Get first 2 lines
+    after = [line for chunk in chunks[chunk_index + 1:] for line in chunk.split('\n')]
+    return select_translation_context(
+        [], after, int(_translation_setting("translation_context_lines", 4)),
+        int(_translation_setting("translation_max_sentence_lines", 28)),
+    )[1]
 
 # 🔍 Translate a single chunk
 def _translate_chunk_with_fallback(chunk, previous_content_prompt, after_content_prompt, theme_prompt, index):
@@ -136,25 +218,36 @@ def _translate_chunk_with_fallback(chunk, previous_content_prompt, after_content
         )
     except Exception:
         lines = chunk.split('\n')
-        if len(lines) <= 1:
+        max_lines = int(_translation_setting("translation_max_sentence_lines", 28))
+        midpoint = sentence_split_point(lines, max_lines)
+        if midpoint is None:
+            console.print(f"[red]Translation block {index} failed; preserving this sentence as one unit rather than splitting its meaning.[/red]")
             raise
 
-        midpoint = len(lines) // 2
+        context_lines = int(_translation_setting("translation_context_lines", 4))
+        left_before, left_after = select_translation_context(
+            list(previous_content_prompt or []), lines[midpoint:] + list(after_content_prompt or []),
+            context_lines, max_lines,
+        )
+        right_before, right_after = select_translation_context(
+            list(previous_content_prompt or []) + lines[:midpoint], list(after_content_prompt or []),
+            context_lines, max_lines,
+        )
         console.print(
             f"[yellow]Translation block {index} failed with {len(lines)} lines. "
             f"Retrying as {midpoint}+{len(lines) - midpoint} smaller lines.[/yellow]"
         )
         left_translation, left_source = _translate_chunk_with_fallback(
             '\n'.join(lines[:midpoint]),
-            previous_content_prompt,
-            after_content_prompt,
+            left_before,
+            left_after,
             theme_prompt,
             f"{index}.1",
         )
         right_translation, right_source = _translate_chunk_with_fallback(
             '\n'.join(lines[midpoint:]),
-            previous_content_prompt,
-            after_content_prompt,
+            right_before,
+            right_after,
             theme_prompt,
             f"{index}.2",
         )
@@ -171,11 +264,6 @@ def translate_chunk(chunk, chunks, theme_prompt, i):
         i,
     )
     return i, english_result, translation
-
-# Add similarity calculation function
-def similar(a, b):
-    return SequenceMatcher(None, a, b).ratio()
-
 
 def _apply_uploaded_subtitle_timestamps(df_translate):
     if not (
@@ -225,28 +313,7 @@ def translate_all():
                 results.append(future.result())
                 progress.update(task, advance=1)
 
-    results.sort(key=lambda x: x[0])  # Sort results based on original order
-    
-    # 💾 Save results to lists and Excel file
-    src_text, trans_text = [], []
-    for i, chunk in enumerate(chunks):
-        chunk_lines = chunk.split('\n')
-        src_text.extend(chunk_lines)
-        
-        # Calculate similarity between current chunk and translation results
-        chunk_text = ''.join(chunk_lines).lower()
-        matching_results = [(r, similar(''.join(r[1].split('\n')).lower(), chunk_text)) 
-                          for r in results]
-        best_match = max(matching_results, key=lambda x: x[1])
-        
-        # Check similarity and handle exceptions
-        if best_match[1] < 0.9:
-            console.print(f"[yellow]Warning: No matching translation found for chunk {i}[/yellow]")
-            raise ValueError(f"Translation matching failed (chunk {i})")
-        elif best_match[1] < 1.0:
-            console.print(f"[yellow]Warning: Similar match found (chunk {i}, similarity: {best_match[1]:.3f})[/yellow]")
-            
-        trans_text.extend(best_match[0][2].split('\n'))
+    src_text, trans_text = assemble_translation_results(chunks, results)
     
     df_translate = pd.DataFrame({'Source': src_text, 'Translation': trans_text})
     subtitle_output_configs = [('trans_subs_for_audio.srt', ['Translation'])]
@@ -256,8 +323,11 @@ def translate_all():
         df_text['text'] = df_text['text'].str.strip('"').str.strip()
         df_time = align_timestamp(df_text, df_translate, subtitle_output_configs, output_dir=None, for_display=False)
     df_time = _refine_hard_translations(df_time)
+    df_time = _repair_adjacent_duplicates(df_time)
+    df_time["Translation Workflow"] = "sentence_context_v1"
     console.print(df_time)
     # apply check_len_then_trim to df_time['Translation'], only when duration > MIN_TRIM_DURATION.
+    df_time['Translation Before Timing Trim'] = df_time['Translation']
     df_time['Translation'] = df_time.apply(lambda x: check_len_then_trim(x['Translation'], x['duration']) if x['duration'] > load_key("min_trim_duration") else x['Translation'], axis=1)
     console.print(df_time)
     

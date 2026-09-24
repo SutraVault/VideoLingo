@@ -1,5 +1,6 @@
 import json
 from core.utils import *
+from core.utils.proofread_context import sentence_spans
 
 ## ================================================================
 # @ step4_splitbymeaning.py
@@ -113,19 +114,39 @@ def generate_shared_prompt(previous_content_prompt, after_content_prompt, summar
         if not value:
             return "None"
         if isinstance(value, list):
-            return " / ".join(str(item) for item in value)
+            return json.dumps(value, ensure_ascii=False)
         return str(value)
 
     parts = [f"Context summary: {format_context(summary_prompt)}"]
     previous = format_context(previous_content_prompt)
     subsequent = format_context(after_content_prompt)
     if previous != "None":
-        parts.append(f"Previous lines: {previous}")
+        parts.append(f"Read-only previous source lines (do NOT translate into output): {previous}")
     if subsequent != "None":
-        parts.append(f"Next lines: {subsequent}")
+        parts.append(f"Read-only next source lines (do NOT translate into output): {subsequent}")
     if things_to_note_prompt:
         parts.append(f"Terms: {things_to_note_prompt}")
     return "\n".join(parts)
+
+
+def translation_quality_rules(lines):
+    # Use the same bounded sentence heuristic as the translation batcher.
+    try:
+        max_lines = int(load_key("translation_max_sentence_lines"))
+    except KeyError:
+        max_lines = 28
+    rows = [{"source": line} for line in lines.split('\n')]
+    groups = [[str(i + 1) for i in range(a, b)] for a, b in sentence_spans(rows, max_lines)]
+    return f"""Translation quality contract:
+- Read each complete source sentence and its context BEFORE allocating translated text to rows. A subtitle newline is NOT a sentence ending: do not insert a full stop after a dangling condition, modifier or conjunction.
+- Interpret word senses and idioms in context; do not mechanically translate dictionary meanings. For example, a 'forgiving' engine tolerates poor operating conditions; 'fully equipped' does not imply 'heavily armed'. Do not invent technical facts to repair unclear source text.
+- Preserve negatives, conditions, pronoun references, terminology, names, numbers and units. Use natural concise spoken wording, not broken syntax or unexplained literal phrasing.
+- Within each listed semantic group, redistribute meaning between ADJACENT editable rows when target-language word order requires it (e.g. fronting a following condition or modifier in Chinese). Keep ids, row count and order unchanged, and every row nonempty. Avoid moving information far from its original speech timing.
+- Every source proposition must appear exactly once across the group. Do not repeat a complete translation in one row and then translate its remainder again in the next row. Do not remove repetitions that actually occur in the source.
+- Context outside the editable input is read-only. Never copy its meaning into output, move meaning across groups/batches, or output context rows. If a sentence crosses a forced safety boundary, translate only the editable portion without completing it using the context.
+- Before returning, silently check the COMBINED translation for missing/duplicated meaning, correct word senses, clause order and sentence punctuation. This is part of the same translation request, not an extra commentary or a demand for stylistic changes.
+Semantic groups of editable ids: {json.dumps(groups)}"""
+
 
 def get_prompt_faithfulness(lines, shared_prompt):
     TARGET_LANGUAGE = load_key("target_language")
@@ -140,10 +161,12 @@ def get_prompt_faithfulness(lines, shared_prompt):
 
     src_language = load_key("whisper.detected_language")
     prompt_faithfulness = f'''
-Translate {src_language} subtitles into concise {TARGET_LANGUAGE} subtitles line by line.
+Translate the continuous {src_language} passage into concise, natural {TARGET_LANGUAGE} subtitles, allocated to the supplied ids.
 Return exactly one JSON object property for every input id. Do not skip ids.
 Keep meaning faithful, preserve numbering, and use the context/terms below.
 Prefer short wording that can be spoken within the original subtitle timing.
+
+{translation_quality_rules(lines)}
 
 {shared_prompt}
 
@@ -161,8 +184,8 @@ Output only JSON. Do not echo source text.
 def get_prompt_expressiveness(faithfulness_result, lines, shared_prompt):
     TARGET_LANGUAGE = load_key("target_language")
     direct_rows = [
-        {"id": str(key), "source": line, "direct": value["direct"]}
-        for key, value, line in zip(faithfulness_result.keys(), faithfulness_result.values(), lines.split('\n'))
+        {"id": str(i), "source": line, "direct": faithfulness_result[str(i)]["direct"]}
+        for i, line in enumerate(lines.split('\n'), 1)
     ]
     direct_lines = json.dumps(
         direct_rows,
@@ -181,6 +204,8 @@ Rewrite the direct {TARGET_LANGUAGE} translations as natural dubbing subtitles.
 Keep the same numbering and line count. Do not add comments, explanations, or empty lines.
 Use concise spoken language. Avoid literary rewrites, filler words, and long clauses.
 Make each line short enough to be read aloud in the original subtitle timing.
+
+{translation_quality_rules(lines)}
 
 {shared_prompt}
 
@@ -279,6 +304,7 @@ Please follow these steps and provide the results in the JSON output:
 Note: Start you answer with ```json and end with ```, do not add any other text.
 '''.strip()
     return trim_prompt
+
 
 ## ================================================================
 # @ tts_main

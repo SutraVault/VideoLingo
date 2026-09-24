@@ -110,6 +110,12 @@ summary_length: 8000
 # *Translation chunk size. Larger chunks reduce repeated prompt tokens and API requests.
 translation_chunk_chars: 1600
 translation_chunk_lines: 12
+translation_context_lines: 4 # Read-only rows on each side, extended to sentence edges.
+translation_max_sentence_lines: 28 # Safety cap for missing punctuation; chunk budgets are soft.
+translation_duplicate_audit:
+  enabled: true
+  min_phrase_chars: 4
+  similarity_threshold: 0.72
 
 # *Maximum number of words for the first rough cut, below 18 will cut too finely affecting translation, above 22 is too long and will make subsequent subtitle splitting difficult to align
 max_split_length: 20

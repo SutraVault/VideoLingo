@@ -259,6 +259,14 @@ class PipelineTests(unittest.TestCase):
             scope["_proofread_translation_unlocked"](force=True)
         self.assertEqual(saved, [])
 
+    def test_new_candidates_do_not_inherit_old_human_verdicts(self):
+        frame, saved, scope = self.setup_pipeline()
+        frame["Human Verdict"] = "fixed"
+        frame["Human Note"] = "评价旧版本"
+        scope["_proofread_translation_unlocked"](force=True)
+        self.assertTrue(all(saved[0][1]["Human Verdict"] == ""))
+        self.assertTrue(all(saved[0][1]["Human Note"] == ""))
+
 
 if __name__ == "__main__":
     unittest.main()

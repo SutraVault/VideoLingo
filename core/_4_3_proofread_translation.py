@@ -287,6 +287,10 @@ def _proofread_translation_unlocked(force=False):
     output_df["Proofread Status"] = proofread_status
     output_df["Proofread Issues"] = proofread_issues
     output_df["Proofread Reason"] = proofread_reasons
+    # Never infer human quality judgments from model status or change count.
+    # A rerun creates new candidates, so prior judgments must not carry over.
+    output_df["Human Verdict"] = ""
+    output_df["Human Note"] = ""
     console.print(
         f"[cyan]Model audit: {proofread_status.count('corrected')} corrected, "
         f"{proofread_status.count('ok')} unchanged, "

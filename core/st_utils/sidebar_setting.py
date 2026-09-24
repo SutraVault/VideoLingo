@@ -420,6 +420,7 @@ def page_setting():
 
             st.caption("校对附带前后文参考（默认各 4 行，可在 config.yaml 的 llm_proofread.context_lines 调整）；允许同一语义段内跨行调整译文，保留字幕 ID 和时间轴。")
             st.caption("校对表新增 Proofread Status / Issues / Reason，记录模型判定、问题类型及原因。needs_review 表示需人工确认；not_reviewed 表示未送审。已有结果需点击“重新运行 LLM 校对”更新。")
+            st.caption("Human Verdict / Human Note 留给人工评价纠错或误改；重跑校对会清空这些评价，请先备份。评价值及多视频统计方法见 docs/translation_quality.md。")
 
             proofread_override_api = st.toggle(
                 t("Override LLM for Proofread"),
