@@ -293,7 +293,7 @@ speed_factor:
 
 # Shorten final merged dubbing blocks before running the TTS engine.
 tts_preflight:
-  enabled: true
+  enabled: false
   # Compensates for the generic estimator tending to under-predict neural TTS.
   estimator_safety_ratio: 1.15
   target_fill_ratio: 0.95

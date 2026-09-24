@@ -128,6 +128,16 @@ def process_srt():
         
         subtitles.append({'number': number, 'start_time': start_time, 'end_time': end_time, 'duration': duration, 'text': text, 'origin': origin})
     
+    # Reject broken alignment before the short-row merger can absorb a whole
+    # passage into a tiny late block and hand it to destructive duration trims.
+    for index, subtitle in enumerate(subtitles):
+        if subtitle['duration'] <= 0 or (
+            index and subtitle['start_time'] < subtitles[index - 1]['start_time']
+        ):
+            raise ValueError(
+                f"Invalid or backward subtitle timing at subtitle {subtitle['number']}; "
+                "regenerate aligned subtitles before generating audio tasks."
+            )
     df = pd.DataFrame(subtitles)
     
     i = 0
@@ -135,7 +145,7 @@ def process_srt():
     while i < len(df):
         today = datetime.date.today()
         if df.loc[i, 'duration'] < MIN_SUB_DUR:
-            if i < len(df) - 1 and time_diff_seconds(df.loc[i, 'start_time'],df.loc[i+1, 'start_time'],today) < MIN_SUB_DUR:
+            if i < len(df) - 1 and 0 <= time_diff_seconds(df.loc[i, 'start_time'],df.loc[i+1, 'start_time'],today) < MIN_SUB_DUR:
                 rprint(f"[bold yellow]Merging subtitles {i+1} and {i+2}[/bold yellow]")
                 df.loc[i, 'text'] += ' ' + df.loc[i+1, 'text']
                 df.loc[i, 'origin'] += ' ' + df.loc[i+1, 'origin']

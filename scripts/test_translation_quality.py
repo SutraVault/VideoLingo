@@ -227,6 +227,23 @@ class HardPassTests(unittest.TestCase):
 
 
 class TTSPreflightTests(unittest.TestCase):
+    def test_missing_setting_keeps_semantic_rewrite_disabled(self):
+        import pandas as pd
+        frame = pd.DataFrame([{
+            "number": 5,
+            "text": "那它可算是1870年代所有单发黑火药步枪中最酷的一款。",
+            "lines": ["那它可算是1870年代所有单发黑火药步枪中最酷的一款。"],
+        }])
+        ns = functions(
+            "core/_10_gen_audio.py",
+            pd=pd,
+            Tuple=Tuple,
+            load_key=lambda key: (_ for _ in ()).throw(KeyError(key)),
+        )
+        result, changed = ns["preflight_tts_tasks"](frame)
+        self.assertEqual(changed, [])
+        self.assertEqual(result.loc[0, "text"], frame.loc[0, "text"])
+
     def test_oversized_final_block_is_shortened_before_inference(self):
         import pandas as pd
         frame = pd.DataFrame([{

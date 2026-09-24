@@ -60,7 +60,9 @@ def preflight_tts_tasks(tasks_df: pd.DataFrame) -> tuple[pd.DataFrame, list[int]
     try:
         enabled = bool(load_key("tts_preflight.enabled"))
     except KeyError:
-        enabled = True
+        # Semantic shortening can silently omit facts even when the result fits
+        # the requested duration. Keep it opt-in when older configs lack the key.
+        enabled = False
     if not enabled or tasks_df.empty:
         return tasks_df, []
 

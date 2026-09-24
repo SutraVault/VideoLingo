@@ -110,11 +110,16 @@ def get_sentence_timestamps(df_words, df_sentences, fallback_timestamps=None):
     # Build complete string and position mapping
     full_words_str = ''
     position_to_word_idx = {}
+    word_character_ranges = []
     
     for idx, word in enumerate(df_words['text']):
         clean_word = remove_punctuation(safe_text(word).lower())
         start_pos = len(full_words_str)
         full_words_str += clean_word
+        if clean_word:
+            word_character_ranges.append((start_pos, len(full_words_str),
+                                          float(df_words.iloc[idx]['start']),
+                                          float(df_words.iloc[idx]['end'])))
         for pos in range(start_pos, len(full_words_str)):
             position_to_word_idx[pos] = idx
     
@@ -128,10 +133,24 @@ def get_sentence_timestamps(df_words, df_sentences, fallback_timestamps=None):
             continue
 
         sentence_len = len(clean_sentence)
+        # Reviewed timing anchors this row to its original passage. A later
+        # exact repetition must not outrank a local ASR spelling correction.
+        fallback = None
+        if fallback_timestamps is not None and len(time_stamp_list) < len(fallback_timestamps):
+            fallback = fallback_timestamps[len(time_stamp_list)]
+        search_end = len(full_words_str)
+        if fallback is not None:
+            eligible = [(left, right) for left, right, start, end in word_character_ranges
+                        if end >= fallback[0] - 1.0 and start <= fallback[1] + 1.0]
+            if eligible:
+                current_pos = max(current_pos, eligible[0][0])
+                search_end = eligible[-1][1]
+            else:
+                search_end = current_pos
         sentence_start_pos = current_pos
         
         match_found = False
-        while current_pos <= len(full_words_str) - sentence_len:
+        while current_pos <= search_end - sentence_len:
             if full_words_str[current_pos:current_pos+sentence_len] == clean_sentence:
                 start_word_idx = position_to_word_idx[current_pos]
                 end_word_idx = position_to_word_idx[current_pos + sentence_len - 1]
@@ -150,7 +169,7 @@ def get_sentence_timestamps(df_words, df_sentences, fallback_timestamps=None):
             current_pos += 1
             
         if not match_found:
-            fuzzy_match = fuzzy_find_sentence(full_words_str, clean_sentence, sentence_start_pos)
+            fuzzy_match = fuzzy_find_sentence(full_words_str[:search_end], clean_sentence, sentence_start_pos)
             if fuzzy_match:
                 start_pos, end_pos, matched_text, score = fuzzy_match
                 start_word_idx = position_to_word_idx[start_pos]
@@ -171,9 +190,6 @@ def get_sentence_timestamps(df_words, df_sentences, fallback_timestamps=None):
                 current_pos = end_pos
                 continue
 
-            fallback = None
-            if fallback_timestamps is not None and idx < len(fallback_timestamps):
-                fallback = fallback_timestamps[idx]
             if fallback is not None:
                 print(
                     f"\n⚠️ ASR text missing; using the reviewed timestamp for sentence: {sentence}\n"
@@ -200,6 +216,9 @@ def get_sentence_timestamps(df_words, df_sentences, fallback_timestamps=None):
         fallback = next((item for item in reversed(time_stamp_list) if item), (0.0, 0.01))
         _fill_pending_empty_timestamps(time_stamp_list, pending_empty_rows, fallback)
     
+    for row, (start, end) in enumerate(time_stamp_list):
+        if end <= start or (row and start < time_stamp_list[row - 1][0]):
+            raise ValueError(f"Invalid or backward subtitle timestamp at row {row + 1}: {start} --> {end}")
     return time_stamp_list
 
 def _fill_pending_empty_timestamps(time_stamp_list, pending_empty_rows, next_timestamp):
