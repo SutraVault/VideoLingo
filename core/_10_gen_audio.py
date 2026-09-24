@@ -273,7 +273,7 @@ def generate_tts_audio(tasks_df: pd.DataFrame) -> pd.DataFrame:
                 raise e
         
         # Local cloning engines keep large models in memory and should run serially.
-        serial_tts_methods = {"gpt_sovits", "indextts"}
+        serial_tts_methods = {"gpt_sovits", "indextts", "kokoro_tts"}
         max_workers = load_key("max_workers") if load_key("tts_method") not in serial_tts_methods else 1
         # parallel processing for remaining tasks
         if len(tasks_df) > warmup_size:

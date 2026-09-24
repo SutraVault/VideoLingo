@@ -147,7 +147,7 @@ pause_after_translate: true
 auto_start_dubbing_after_subtitles: true
 
 ## ======================== Dubbing Settings ======================== ##
-# TTS selection [sf_fish_tts, openai_tts, gpt_sovits, indextts, azure_tts, fish_tts, edge_tts, custom_tts]
+# TTS selection [sf_fish_tts, openai_tts, gpt_sovits, indextts, kokoro_tts, azure_tts, fish_tts, edge_tts, custom_tts]
 tts_method: 'indextts'
 
 # SiliconFlow FishTTS
@@ -187,6 +187,13 @@ sf_cosyvoice2:
 # Edge TTS configuration
 edge_tts:
   voice: 'zh-CN-YunjianNeural'
+
+# Local fixed-voice Kokoro TTS (no reference audio or API key)
+kokoro_tts:
+  voice: 'zm_yunxi'
+  device: 'auto' # auto, cuda, cpu
+  speed: 1.0
+  spell_latin_letters: true
 
 # SoVITS configuration
 gpt_sovits:

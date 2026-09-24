@@ -523,6 +523,7 @@ def page_setting():
             "edge_tts",
             "gpt_sovits",
             "indextts",
+            "kokoro_tts",
             "custom_tts",
             "sf_cosyvoice2",
             "f5tts",
@@ -602,6 +603,52 @@ def page_setting():
             if selected_refer_mode != load_key("gpt_sovits.refer_mode"):
                 update_key("gpt_sovits.refer_mode", selected_refer_mode)
                 st.rerun()
+
+        elif select_tts == "kokoro_tts":
+            kokoro_voices = [
+                "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi",
+                "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang",
+            ]
+            current_voice = load_key("kokoro_tts.voice")
+            selected_voice = st.selectbox(
+                "Kokoro Voice",
+                options=kokoro_voices,
+                index=kokoro_voices.index(current_voice) if current_voice in kokoro_voices else 7,
+                help="zf = female, zm = male. These are fixed local voices; no reference audio is used.",
+            )
+            if selected_voice != current_voice:
+                update_key("kokoro_tts.voice", selected_voice)
+                st.rerun()
+
+            devices = ["auto", "cuda", "cpu"]
+            current_device = str(load_key("kokoro_tts.device"))
+            selected_device = st.selectbox(
+                "Kokoro Device",
+                options=devices,
+                index=devices.index(current_device) if current_device in devices else 0,
+            )
+            if selected_device != current_device:
+                update_key("kokoro_tts.device", selected_device)
+                st.rerun()
+
+            speed = st.slider(
+                "Kokoro Native Speed",
+                min_value=0.5,
+                max_value=2.0,
+                value=float(load_key("kokoro_tts.speed")),
+                step=0.05,
+                help="1.0 is the natural model speed. VideoLingo still performs final timeline fitting.",
+            )
+            if speed != load_key("kokoro_tts.speed"):
+                update_key("kokoro_tts.speed", speed)
+
+            spell_letters = st.checkbox(
+                "Spell Latin acronyms",
+                value=bool(load_key("kokoro_tts.spell_latin_letters")),
+                help="Read uppercase technical codes letter by letter, e.g. M6 and CTDM.",
+            )
+            if spell_letters != load_key("kokoro_tts.spell_latin_letters"):
+                update_key("kokoro_tts.spell_latin_letters", spell_letters)
 
         elif select_tts == "indextts":
             version_labels = {"2": "IndexTTS2", "2.5": "IndexTTS2.5"}
