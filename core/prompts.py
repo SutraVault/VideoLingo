@@ -306,6 +306,23 @@ Note: Start you answer with ```json and end with ```, do not add any other text.
     return trim_prompt
 
 
+def get_tts_preflight_prompt(text, source, target_seconds, max_chars):
+    return f'''You are preparing a translated subtitle for spoken dubbing.
+Shorten the target-language text enough to fit its final merged audio block.
+
+Source meaning: {source}
+Current target text: {text}
+Target natural speech duration: at most {target_seconds:.2f} seconds
+Suggested maximum visible characters: {max_chars}
+
+Rules:
+- Preserve every name, number, unit, negation and essential factual claim from the source.
+- Remove duplicated meaning, filler and unnecessarily long modifiers first.
+- Use concise natural spoken wording. Do not add facts or commentary.
+- Return a genuinely shorter non-empty result in the same target language.
+
+Output JSON only: {{"result": "shortened subtitle"}}'''.strip()
+
 ## ================================================================
 # @ tts_main
 def get_correct_text_prompt(text):

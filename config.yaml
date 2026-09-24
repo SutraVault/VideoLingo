@@ -291,6 +291,13 @@ speed_factor:
   # Do not abort the full run for a marginal miss after native regeneration.
   emergency_overflow_ratio: 1.05
 
+# Shorten final merged dubbing blocks before running the TTS engine.
+tts_preflight:
+  enabled: true
+  # Compensates for the generic estimator tending to under-predict neural TTS.
+  estimator_safety_ratio: 1.15
+  target_fill_ratio: 0.95
+
 # *Merge audio configuration
 min_subtitle_duration: 2.5 # Minimum subtitle duration, will be forcibly extended
 min_trim_duration: 3.5 # Subtitles shorter than this value won't be split

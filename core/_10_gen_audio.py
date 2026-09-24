@@ -1,4 +1,5 @@
 import os
+import ast
 import math
 import re
 import time
@@ -21,6 +22,9 @@ from core.utils.models import *
 from core.utils.timing import timed_step
 from core.asr_backend.audio_preprocess import get_audio_duration
 from core.tts_backend.tts_main import tts_main
+from core.tts_backend.estimate_duration import init_estimator, estimate_duration
+from core.prompts import get_tts_preflight_prompt
+from core.utils.llm_stage_utils import stage_api_config
 from core.tts_backend.indextts_tts import (
     get_indextts_duration_stats,
     regenerate_indextts_natural,
@@ -35,6 +39,115 @@ OUTPUT_FILE_TEMPLATE = f"{_AUDIO_SEGS_DIR}/{{}}.wav"
 WARMUP_SIZE = 5
 MAX_CHUNK_TRUNCATE_OVERFLOW = 1.2
 TTS_GENERATION_LOCK = "output/log/tts_generation.lock"
+
+
+def _task_lines(value):
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if isinstance(value, str):
+        try:
+            parsed = ast.literal_eval(value)
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        except (SyntaxError, ValueError):
+            pass
+        return [value]
+    return [str(value or "")]
+
+
+def preflight_tts_tasks(tasks_df: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]:
+    """Shorten oversized final audio blocks before any TTS inference starts."""
+    try:
+        enabled = bool(load_key("tts_preflight.enabled"))
+    except KeyError:
+        enabled = True
+    if not enabled or tasks_df.empty:
+        return tasks_df, []
+
+    output = tasks_df.copy()
+    if "TTS Text Before Preflight" not in output:
+        output["TTS Text Before Preflight"] = ""
+    if "TTS Preflight Trimmed" not in output:
+        output["TTS Preflight Trimmed"] = False
+    estimator = init_estimator()
+    max_speed = float(load_key("speed_factor.max"))
+    safety_ratio = float(load_key("tts_preflight.estimator_safety_ratio"))
+    target_fill = float(load_key("tts_preflight.target_fill_ratio"))
+    changed = []
+
+    for index, row in output.iterrows():
+        lines = _task_lines(row.get("lines", row.get("text", "")))
+        text = "，".join(line.strip(" ，,") for line in lines if line.strip())
+        if not text:
+            continue
+        available = float(row.get("tol_dur", row.get("duration", 0)) or 0) - 0.1
+        if available <= 0:
+            continue
+        estimated = float(estimate_duration(text, estimator))
+        actual = float(row.get("real_dur", 0) or 0)
+        if math.isnan(actual):
+            actual = 0.0
+        predicted = max(estimated * safety_ratio, actual)
+        allowed = available * max_speed
+        # Trigger only when the predicted audio exceeds the configured hard
+        # speed limit. target_fill is the headroom requested from the rewrite,
+        # not an additional reason to rewrite an otherwise valid block.
+        if predicted <= allowed:
+            continue
+
+        target_estimate = allowed * target_fill / safety_ratio
+        visible_chars = len(re.sub(r"\s|[，。！？、；：,.!?;:]", "", text))
+        max_chars = max(4, math.floor(visible_chars * target_estimate / max(estimated, 0.1)))
+        source = " ".join(_task_lines(row.get("src_lines", row.get("origin", ""))))
+        prompt = get_tts_preflight_prompt(text, source, target_estimate, max_chars)
+
+        def valid_trim(response):
+            result = response.get("result") if isinstance(response, dict) else None
+            if not isinstance(result, str) or not result.strip():
+                return {"status": "error", "message": "result must be a non-empty string"}
+            result = result.replace("\n", " ").strip()
+            result_estimate = float(estimate_duration(result, estimator))
+            if result_estimate > target_estimate:
+                return {
+                    "status": "error",
+                    "message": f"result is still too long ({result_estimate:.2f}s > {target_estimate:.2f}s); shorten it further",
+                }
+            if len(result) >= len(text):
+                return {"status": "error", "message": "result must be shorter than the current text"}
+            return {"status": "success", "message": ""}
+
+        rprint(
+            f"[yellow]TTS preflight subtitle {int(row['number'])}: predicted {predicted:.3f}s "
+            f"for {available:.3f}s; shortening before synthesis.[/yellow]"
+        )
+        response = ask_gpt(
+            prompt,
+            resp_type="json",
+            valid_def=valid_trim,
+            log_title="tts_preflight_trim",
+            api_config=stage_api_config("translate"),
+        )
+        shortened = response["result"].replace("\n", " ").strip()
+        number = int(row["number"])
+        output.at[index, "TTS Text Before Preflight"] = text
+        output.at[index, "TTS Preflight Trimmed"] = True
+        output.at[index, "text"] = shortened
+        output.at[index, "lines"] = [shortened]
+        output.at[index, "src_lines"] = [source]
+        output.at[index, "est_dur"] = float(estimate_duration(shortened, estimator))
+        output.at[index, "real_dur"] = 0.0
+        changed.append(number)
+        for pattern in (f"{number}_*_temp.wav", f"{number}_*.wav"):
+            directory = Path(_AUDIO_TMP_DIR if "temp" in pattern else _AUDIO_SEGS_DIR)
+            for cached in directory.glob(pattern):
+                cached.unlink(missing_ok=True)
+        save_audio_tasks(output)
+
+    if changed:
+        rprint(f"[green]TTS preflight shortened {len(changed)} final block(s): {changed}[/green]")
+    else:
+        rprint("[green]TTS preflight: all final blocks fit the estimated limit.[/green]")
+    return output, changed
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -877,6 +990,11 @@ def _gen_audio_unlocked() -> None:
     # 📝 Step2: Load task file
     tasks_df = pd.read_excel(_8_1_AUDIO_TASK)
     rprint("[green]📊 Loaded task file successfully[/green]")
+
+    # Validate the final post-merge payloads before spending time synthesizing
+    # the full video. Any changed row invalidates only its own cached audio.
+    tasks_df, _ = preflight_tts_tasks(tasks_df)
+    save_audio_tasks(tasks_df)
     
     # 🔊 Step3: Generate TTS audio, or reuse a complete cache after a merge-only failure.
     if can_reuse_generated_tts(tasks_df):

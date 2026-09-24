@@ -226,6 +226,36 @@ class HardPassTests(unittest.TestCase):
         self.assertEqual(call.call_count, 1)
 
 
+class TTSPreflightTests(unittest.TestCase):
+    def test_oversized_final_block_is_shortened_before_inference(self):
+        import pandas as pd
+        frame = pd.DataFrame([{
+            "number": 7, "duration": 2.5, "tol_dur": 2.5,
+            "text": "这是非常非常冗长的字幕文本", "lines": ["这是非常非常冗长的字幕文本"],
+            "src_lines": ["This is the source."], "real_dur": 0.0, "est_dur": 8.0,
+        }])
+        settings = {"tts_preflight.enabled": True, "speed_factor.max": 1.55,
+                    "tts_preflight.estimator_safety_ratio": 1.15,
+                    "tts_preflight.target_fill_ratio": .95}
+        estimates = lambda text, _: len(re.sub(r"\W", "", text)) * .5
+        ask = Mock(return_value={"result": "精简字幕"})
+        fake_path = Mock(return_value=Mock(glob=Mock(return_value=[])))
+        ns = functions(
+            "core/_10_gen_audio.py", pd=pd, Tuple=Tuple, Path=fake_path,
+            contextmanager=lambda fn: fn, load_key=settings.__getitem__,
+            init_estimator=lambda: object(), estimate_duration=estimates,
+            get_tts_preflight_prompt=lambda *args: "prompt", ask_gpt=ask,
+            stage_api_config=lambda _: {}, rprint=Mock(), save_audio_tasks=Mock(),
+            _AUDIO_TMP_DIR="tmp", _AUDIO_SEGS_DIR="segs",
+        )
+        ns["save_audio_tasks"] = Mock()
+        result, changed = ns["preflight_tts_tasks"](frame)
+        self.assertEqual(changed, [7])
+        self.assertEqual(result.loc[0, "lines"], ["精简字幕"])
+        self.assertTrue(result.loc[0, "TTS Preflight Trimmed"])
+        self.assertEqual(ask.call_count, 1)
+
+
 class PipelineTests(unittest.TestCase):
     def test_translation_pipeline_preserves_id_order_timing_and_pretrim_text(self):
         import concurrent.futures
