@@ -36,6 +36,22 @@ class TimestampTests(unittest.TestCase):
         rows = pd.DataFrame({"Source": ["entirely absent words", "next sentence"]})
         self.assertEqual(self.alignment()["get_sentence_timestamps"](words, rows, [(1, 2), (5, 6)]), [(1, 2), (5, 6)])
 
+    def test_audio_rows_preserve_reviewed_semantic_sentence(self):
+        reviewed = pd.DataFrame({
+            "Source": ["And that sounds boring compared to the famous Bavarian lightning rifle"],
+            "Translation": ["这样介绍有点平淡，但如果说它是著名的巴伐利亚闪电步枪，"],
+            "timestamp": ["00:00:13,921 --> 00:00:20,250"],
+        })
+        ns = self.alignment()
+        audio_rows = ns["build_audio_translation_rows"](reviewed)
+
+        self.assertEqual(len(audio_rows), 1)
+        self.assertEqual(audio_rows.iloc[0]["Translation"], reviewed.iloc[0]["Translation"])
+        self.assertEqual(
+            ns["build_reviewed_timestamp_fallback"](audio_rows, reviewed),
+            [(13.921, 20.25)],
+        )
+
     def test_audio_task_merger_rejects_backward_srt(self):
         content = "1\n00:02:53,000 --> 00:02:54,000\nfirst\n\n2\n00:02:23,000 --> 00:02:25,000\nsecond\n"
         ns = functions("core/_8_1_audio_task.py", pd=pd, re=re, datetime=datetime,
