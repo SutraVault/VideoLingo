@@ -40,11 +40,14 @@ def _format_candidates(resolution):
     if resolution == 'best':
         return [
             'bestvideo+bestaudio/best',
+            'bv*+ba/b',
             'best[ext=mp4]/best',
         ]
     return [
         f'bestvideo[height<={resolution}]+bestaudio/best[height<={resolution}]',
+        f'bv*[height<={resolution}]+ba/b[height<={resolution}]',
         f'best[ext=mp4][height<={resolution}]/best[height<={resolution}]',
+        'bestvideo+bestaudio/best',
     ]
 
 def _build_ydl_opts(save_path, format_selector):
@@ -163,6 +166,14 @@ def _is_http_403_error(error):
     message = str(error)
     return "HTTP Error 403" in message or "Forbidden" in message
 
+
+def _is_format_unavailable_error(error):
+    message = str(error).lower()
+    return (
+        "requested format is not available" in message
+        or "no video formats found" in message
+    )
+
 def download_video_ytdlp(
     url,
     save_path='output',
@@ -209,11 +220,26 @@ def download_video_ytdlp(
             break
         except Exception as e:
             last_error = e
-            if not _is_http_403_error(e):
+            if _is_http_403_error(e):
+                rprint("[yellow]yt-dlp got HTTP 403; retrying with a fallback format...[/yellow]")
+                continue
+            if _is_format_unavailable_error(e):
+                rprint(
+                    "[yellow]yt-dlp could not use the selected format; "
+                    "refreshing video metadata and trying a fallback format...[/yellow]"
+                )
+                continue
+            else:
                 raise
-            rprint("[yellow]yt-dlp got HTTP 403; retrying with a fallback format...[/yellow]")
 
     if last_error is not None:
+        if _is_format_unavailable_error(last_error):
+            raise RuntimeError(
+                "YouTube did not expose a compatible downloadable format after "
+                "trying the requested resolution and automatic fallbacks. Retry once "
+                "to refresh player metadata, use a lower resolution, or run yt-dlp "
+                "--list-formats for this URL."
+            ) from last_error
         cookies_path = str(load_key("youtube.cookies_path") or "").strip()
         cookie_hint = (
             " Set a valid YouTube cookies.txt path in the sidebar's Youtube Settings."
