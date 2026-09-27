@@ -784,10 +784,17 @@ def regenerate_oversized_indextts2_rows(
         # make the next UI retry repeat work that already succeeded.
         save_audio_tasks(tasks_df)
         if required_speed > emergency_max_speed:
-            raise ValueError(
-                f"IndexTTS2 subtitle {number} is still too long after {max_retries} targeted "
-                f"regeneration attempts: {required_speed:.3f}x > emergency limit "
-                f"{emergency_max_speed:.3f}x. Shorten its translation."
+            # A subtitle can legitimately borrow unused time from adjacent rows in
+            # its semantic chunk.  Aborting here judges the row in isolation and
+            # can reject audio that the final chunk timeline fits without any
+            # acceleration at all.  Keep the best recovered candidate and let
+            # split_oversized_chunks/fit_chunk_to_timeline make the authoritative
+            # decision using the complete chunk duration.
+            rprint(
+                f"[yellow]IndexTTS2 subtitle {number} still needs "
+                f"{required_speed:.3f}x in isolation after {max_retries} targeted "
+                f"regeneration attempts (row limit {emergency_max_speed:.3f}x); "
+                "deferring the final fit decision to its merged subtitle chunk.[/yellow]"
             )
     return tasks_df
 
