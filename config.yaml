@@ -31,7 +31,7 @@ llm_stages:
     reasoning: 'off' # auto, off, low, medium, high, xhigh
   translate:
     model: 'deepseek/deepseek-v4-flash'
-    reasoning: 'low'
+    reasoning: 'off'
   hard_translation:
     enabled: true
     model: 'deepseek/deepseek-v4-flash'
@@ -143,7 +143,13 @@ llm_proofread:
 pause_before_translate: false
 
 # *Whether to pause after generating output\log\translation_results.xlsx, allowing users to manually proofread subtitles before subtitle splitting and dubbing steps
-pause_after_translate: true
+pause_after_translate: false
+
+# Whether to automatically generate a translation draft after downloading or uploading a video
+auto_start_translation_after_video: true
+
+# Whether to open the newly saved translation workbook in the default application
+auto_open_translation_results: true
 
 # Whether to automatically start dubbing after subtitle processing completes
 auto_start_dubbing_after_subtitles: true

@@ -182,5 +182,14 @@
     "Apply LLM Proofread": "Apply LLM Proofread",
     "Rerun LLM Proofread": "Rerun LLM Proofread",
     "LLM proofreading is running. Please wait.": "LLM proofreading is running. Please wait.",
-    "Path to a Netscape-format cookies.txt exported from your browser for YouTube.": "Path to a Netscape-format cookies.txt exported from your browser for YouTube."
+    "Path to a Netscape-format cookies.txt exported from your browser for YouTube.": "Path to a Netscape-format cookies.txt exported from your browser for YouTube.",
+    "Auto-start translation draft after download or upload": "Auto-start translation draft after download or upload",
+    "When download or upload completes, immediately generate the translation draft in stage b.": "When download or upload completes, immediately generate the translation draft in stage b.",
+    "Stop alarm": "Stop alarm",
+    "Reminder rings every 15 seconds until you stop it or continue processing.": "Reminder rings every 15 seconds until you stop it or continue processing.",
+    "Auto-open translation results after translation completes": "Auto-open translation results after translation completes",
+    "Open output/log/translation_results.xlsx with the system default application after saving a new translation draft.": "Open output/log/translation_results.xlsx with the system default application after saving a new translation draft.",
+    "Alarm playback failed": "Alarm playback failed",
+    "After each three-tone alarm, wait 15 silent seconds before ringing again. Stop the alarm or continue processing to silence it.": "After each three-tone alarm, wait 15 silent seconds before ringing again. Stop the alarm or continue processing to silence it.",
+    "For unattended processing, also turn off the pauses before and after translation in the sidebar.": "For unattended processing, also turn off the pauses before and after translation in the sidebar."
 }

@@ -143,8 +143,10 @@ def merge_video_audio():
     
     cmd.extend(['-c:a', 'aac', '-b:a', '96k', DUB_VIDEO])
     
-    subprocess.run(cmd)
+    subprocess.run(cmd, check=True)
     rprint(f"[bold green]Video and audio successfully merged into {DUB_VIDEO}[/bold green]")
+    from core.st_utils.handoff_alarm import play_completion_alarm
+    play_completion_alarm()
 
 if __name__ == '__main__':
     merge_video_audio()

@@ -5,6 +5,12 @@ import os, sys, time
 import streamlit.components.v1 as components
 from core.st_utils.imports_and_utils import *
 from core.st_utils.task_runner import TaskRunner
+from core.st_utils import handoff_alarm
+# Also upgrade cached modules in sessions that predate the alarm change.
+if getattr(handoff_alarm, "ALARM_VERSION", 0) != 4:
+    import importlib
+    importlib.reload(handoff_alarm)
+HandoffAlarm = handoff_alarm.HandoffAlarm
 from core.utils.srt_import import import_srt_to_cleaned_chunks
 from core.utils.timing import read_timing_log, record_event, reset_timing_log
 from core import *
@@ -53,6 +59,7 @@ def _record_timing_event_once(label: str, event_type: str, marker=None):
 
 
 def _start_runner(runner, steps, run_label: str):
+    _stop_handoff_alarms()
     try:
         runner.start(steps, run_label=run_label)
     except TypeError as exc:
@@ -174,24 +181,59 @@ def _render_timing_report():
         st.rerun()
 
 
+def _acknowledge_translation_review():
+    """Acknowledge before rerendering, including a workbook just saved by Excel."""
+    if os.path.exists(TRANSLATION_RESULTS):
+        notification_key = f"translation_draft_{os.path.getmtime(TRANSLATION_RESULTS)}"
+        st.session_state.setdefault("_handoff_acknowledged", set()).add(notification_key)
+    _stop_handoff_alarms()
+
+
+def _stop_handoff_alarms():
+    for notification_key, alarm in st.session_state.get("_handoff_alarms", {}).items():
+        st.session_state.setdefault("_handoff_acknowledged", set()).add(notification_key)
+        alarm.stop()
+    st.session_state["_handoff_alarms"] = {}
+
+
 def _notify_user_handoff(notification_key: str, title: str, message: str, kind: str = "info"):
-    """Play a short browser tone and request/show a desktop notification once."""
-    session_key = f"_handoff_notification_{notification_key}"
-    if st.session_state.get(session_key):
+    """Wait fifteen silent seconds between rings until acknowledged or resumed."""
+    if notification_key in st.session_state.get("_handoff_acknowledged", set()):
         return
+    session_key = f"_handoff_notification_v3_{notification_key}"
+    alarms = st.session_state.setdefault("_handoff_alarms", {})
+    first_notification = not st.session_state.get(session_key)
+    if first_notification:
+        st.session_state[session_key] = True
+        _stop_handoff_alarms()
+        alarms = st.session_state["_handoff_alarms"]
+        record_event("Alarm started", event_type="alarm_started", marker=notification_key)
+        alarms[notification_key] = HandoffAlarm(
+            kind,
+            on_event=lambda event, detail: record_event(
+                detail, event_type=event, marker=notification_key
+            ),
+        )
 
-    st.session_state[session_key] = True
-    if sys.platform.startswith("win"):
-        try:
-            import winsound
-
-            if kind == "error":
-                winsound.MessageBeep(winsound.MB_ICONHAND)
-            else:
-                winsound.MessageBeep(winsound.MB_ICONASTERISK)
-        except RuntimeError:
-            pass
-    st.toast(message, icon="❌" if kind == "error" else "🔔")
+    if notification_key not in alarms:
+        return
+    if getattr(alarms[notification_key], "version", 0) != handoff_alarm.ALARM_VERSION:
+        alarms[notification_key].stop()
+        alarms[notification_key] = HandoffAlarm(
+            kind,
+            on_event=lambda event, detail: record_event(
+                detail, event_type=event, marker=notification_key
+            ),
+        )
+    if st.button(t("Stop alarm"), key=f"stop_alarm_{notification_key}"):
+        _stop_handoff_alarms()
+        st.rerun()
+    st.caption(t("After each three-tone alarm, wait 15 silent seconds before ringing again. Stop the alarm or continue processing to silence it."))
+    alarm_error = getattr(alarms[notification_key], "error_msg", "")
+    if alarm_error:
+        st.warning(f"{t('Alarm playback failed')}: {alarm_error}")
+    if first_notification:
+        st.toast(message, icon="❌" if kind == "error" else "🔔")
     components.html(
         f"""
         <script>
@@ -206,7 +248,7 @@ def _notify_user_handoff(notification_key: str, title: str, message: str, kind: 
             oscillator.type = kind === "error" ? "square" : "sine";
             oscillator.frequency.setValueAtTime(frequency, context.currentTime + start);
             gain.gain.setValueAtTime(0.001, context.currentTime + start);
-            gain.gain.exponentialRampToValueAtTime(0.25, context.currentTime + start + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.125, context.currentTime + start + 0.02);
             gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + start + duration);
             oscillator.connect(gain);
             gain.connect(context.destination);
@@ -230,7 +272,7 @@ def _notify_user_handoff(notification_key: str, title: str, message: str, kind: 
 
         function showNotification() {{
             if (!("Notification" in window)) return;
-            const options = {{ body: message, tag, renotify: true }};
+            const options = {{ body: message, tag, renotify: true, silent: true }};
             if (Notification.permission === "granted") {{
                 new Notification(title, options);
             }} else if (Notification.permission !== "denied") {{
@@ -240,8 +282,12 @@ def _notify_user_handoff(notification_key: str, title: str, message: str, kind: 
             }}
         }}
 
-        ringBell();
-        showNotification();
+        if (!{json.dumps(sys.platform.startswith("win"))}) ringBell();
+        const alarmTimer = window.setInterval(() => {{
+            if (!{json.dumps(sys.platform.startswith("win"))}) ringBell();
+        }}, 15700);
+        window.addEventListener("pagehide", () => window.clearInterval(alarmTimer));
+        if ({json.dumps(first_notification)}) showNotification();
         </script>
         """,
         height=0,
@@ -371,14 +417,17 @@ def _task_control_panel(runner_key: str):
         col1, col2, col3 = st.columns(3)
         with col1:
             if st.button(t("Retry Failed Step"), key=f"{runner_key}_retry_error", width="stretch"):
+                _stop_handoff_alarms()
                 runner.retry_from_failed_step()
                 st.rerun(scope="app")
         with col2:
             if st.button(t("OK"), key=f"{runner_key}_ack_error", width="stretch"):
+                _stop_handoff_alarms()
                 runner.reset()
                 st.rerun(scope="app")
         with col3:
             if st.button(t("Reset Task State"), key=f"{runner_key}_reset_error", width="stretch"):
+                _stop_handoff_alarms()
                 runner.reset()
                 st.rerun(scope="app")
 
@@ -446,10 +495,24 @@ def _text_step_labels(merge_subtitles=False):
     return labels
 
 
+def _automatic_text_steps(merge_subtitles=False, resume=False):
+    return _get_text_steps(
+        merge_subtitles=merge_subtitles,
+        until_translation=load_key('pause_after_translate'),
+        after_translation=resume,
+    )
+
+
+def _should_auto_continue_text(state, translation_ready, subtitles_ready):
+    return (state in ('idle', 'completed') and translation_ready and not subtitles_ready
+            and load_key('auto_start_translation_after_video')
+            and not load_key('pause_after_translate'))
+
+
 def _text_step_status(index, label, runner, translation_ready, subtitles_ready):
     if subtitles_ready:
         return "complete"
-    if index == 0 and os.path.exists(CLEANED_CHUNKS):
+    if index == 0 and os.path.exists(CLEANED_CHUNKS) and os.path.exists('output/log/source_subtitle_segments.xlsx'):
         return "skipped"
     if runner.is_active and runner.current_label == label:
         return runner.state
@@ -534,6 +597,7 @@ def _render_text_steps(runner, merge_subtitles=False):
                 if st.button(
                     t("Continue After Review"),
                     key="continue_text_processing_button",
+                    on_click=_acknowledge_translation_review,
                     disabled=proofread_running,
                 ):
                     record_event(
@@ -568,6 +632,7 @@ def _render_text_steps(runner, merge_subtitles=False):
                     key="delete_translation_draft_button",
                     disabled=proofread_running,
                 ):
+                    _stop_handoff_alarms()
                     os.remove(TRANSLATION_RESULTS)
                     if os.path.exists(PROOFREAD_TRANSLATION_RESULTS):
                         os.remove(PROOFREAD_TRANSLATION_RESULTS)
@@ -590,27 +655,46 @@ def text_processing_section():
 
         merge_subtitles = st.checkbox(
             t("Merging subtitles into the video"),
-            value=False,
+            value=True,
             key="text_processing_merge_subtitles",
         )
-        auto_start_dubbing = st.checkbox(
-            t("Auto-start dubbing after subtitles complete"),
-            value=load_key("auto_start_dubbing_after_subtitles"),
-            key="text_processing_auto_start_dubbing",
-            help=t(
-                "When subtitle processing finishes, automatically start stage c. Dubbing."
-            ),
+        auto_open_results = st.checkbox(
+            t("Auto-open translation results after translation completes"),
+            value=load_key("auto_open_translation_results"),
+            key="text_processing_auto_open_results",
+            help=t("Open output/log/translation_results.xlsx with the system default application after saving a new translation draft."),
         )
-        if auto_start_dubbing != load_key("auto_start_dubbing_after_subtitles"):
-            update_key("auto_start_dubbing_after_subtitles", auto_start_dubbing)
-            st.rerun()
+        if auto_open_results != load_key("auto_open_translation_results"):
+            update_key("auto_open_translation_results", auto_open_results)
 
         if os.path.exists(CLEANED_CHUNKS) and not os.path.exists(TRANS_SRT):
             st.info(
                 t(
-                    "Existing transcription data found. WhisperX word-level transcription will be skipped."
+                    "Existing transcription data found. Its source and settings will be checked before reuse."
                 )
             )
+        if st.session_state.pop("_auto_start_translation_pending", False):
+            if runner.state == "idle" and not os.path.exists(TRANSLATION_RESULTS) and not os.path.exists(TRANS_SRT):
+                reset_timing_log()
+                record_event(
+                    t("Generate Translation Draft"),
+                    event_type="auto_start_translation_draft",
+                )
+                _start_runner(
+                    runner,
+                    _automatic_text_steps(merge_subtitles),
+                    t("Subtitle draft to review") if load_key('pause_after_translate') else t("Subtitle processing"),
+                )
+                st.rerun()
+
+        # A previously queued draft-only run can finish after the pause toggle
+        # is disabled. Resume downstream steps, without repeating ASR/translation.
+        if _should_auto_continue_text(
+            runner.state, os.path.exists(TRANSLATION_RESULTS), os.path.exists(TRANS_SRT)
+        ):
+            _start_runner(runner, _automatic_text_steps(merge_subtitles, resume=True), t("Subtitle processing"))
+            st.rerun()
+
         _render_text_steps(runner, merge_subtitles)
 
         if not os.path.exists(TRANS_SRT):
@@ -765,7 +849,7 @@ def audio_processing_section():
             st.rerun()
 
         if not os.path.exists(DUB_VIDEO):
-            if os.path.exists(TRANS_SRT) and not runner.is_active and not runner.is_done:
+            if os.path.exists(TRANS_SRT) and not runner.is_active and not runner.is_done and not load_key("auto_start_dubbing_after_subtitles"):
                 _notify_user_handoff(
                     f"audio_ready_{os.path.getmtime(TRANS_SRT)}",
                     "VideoLingo",

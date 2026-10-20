@@ -33,6 +33,24 @@ def _translation_setting(key, default):
         return default
 
 
+def _open_translation_results():
+    """Open a newly saved workbook without failing the translation task."""
+    if not _translation_setting("auto_open_translation_results", True):
+        return
+    try:
+        import sys
+        import subprocess
+
+        path = os.path.abspath(_4_2_TRANSLATION)
+        if sys.platform.startswith("win"):
+            os.startfile(path)
+        else:
+            command = "open" if sys.platform == "darwin" else "xdg-open"
+            subprocess.Popen([command, path])
+    except OSError as exc:
+        console.print(f"[yellow]Could not open translation results: {exc}[/yellow]")
+
+
 def _valid_hard_translation(expected_ids):
     def validate(result):
         if not isinstance(result, dict):
@@ -333,6 +351,7 @@ def translate_all():
     
     df_time.to_excel(_4_2_TRANSLATION, index=False)
     console.print("[bold green]✅ Translation completed and results saved.[/bold green]")
+    _open_translation_results()
 
 if __name__ == '__main__':
     translate_all()

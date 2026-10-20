@@ -134,5 +134,14 @@
     "Task error": "任務出錯",
     "OK": "確定",
     "Reflect Translate": "潤色翻譯",
-    "Run a second translation pass to make subtitles more natural. Disable for faster local LLM translation.": "進行第二輪潤色翻譯，讓字幕更自然。關閉後本地 LLM 翻譯更快。"
+    "Run a second translation pass to make subtitles more natural. Disable for faster local LLM translation.": "進行第二輪潤色翻譯，讓字幕更自然。關閉後本地 LLM 翻譯更快。",
+    "Auto-start translation draft after download or upload": "下載或上傳完成後自動生成翻譯草稿",
+    "When download or upload completes, immediately generate the translation draft in stage b.": "下載或上傳完成後，立即開始 b 步驟的生成翻譯草稿。",
+    "Stop alarm": "停止響鈴",
+    "Reminder rings every 15 seconds until you stop it or continue processing.": "每 15 秒響鈴一次，直到您停止響鈴或繼續處理。",
+    "Auto-open translation results after translation completes": "翻譯完成後自動開啟翻譯結果",
+    "Open output/log/translation_results.xlsx with the system default application after saving a new translation draft.": "新翻譯草稿儲存後，使用系統預設程式開啟 output/log/translation_results.xlsx。",
+    "Alarm playback failed": "鬧鈴播放失敗",
+    "After each three-tone alarm, wait 15 silent seconds before ringing again. Stop the alarm or continue processing to silence it.": "每組三聲鬧鈴結束後靜音 15 秒，再次響鈴。點擊停止響鈴或繼續處理即可關閉。",
+    "For unattended processing, also turn off the pauses before and after translation in the sidebar.": "如需全程自動處理，請同時關閉側欄中的翻譯前暫停和翻譯後暫停。"
 }

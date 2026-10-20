@@ -196,5 +196,14 @@
     "Step": "Step",
     "Detailed Steps": "Detailed Steps",
     "Reset Timing Log": "Reset Timing Log",
-    "Reset Task State": "重置任务状态"
+    "Reset Task State": "重置任务状态",
+    "Auto-start translation draft after download or upload": "下载或上传完成后自动生成翻译草稿",
+    "When download or upload completes, immediately generate the translation draft in stage b.": "下载或上传完成后，立即开始 b 步骤的生成翻译草稿。",
+    "Stop alarm": "停止响铃",
+    "Reminder rings every 15 seconds until you stop it or continue processing.": "每 15 秒响铃一次，直到您停止响铃或继续处理。",
+    "Auto-open translation results after translation completes": "翻译完成后自动打开翻译结果",
+    "Open output/log/translation_results.xlsx with the system default application after saving a new translation draft.": "新翻译草稿保存后，用系统默认程序打开 output/log/translation_results.xlsx。",
+    "Alarm playback failed": "闹铃播放失败",
+    "After each three-tone alarm, wait 15 silent seconds before ringing again. Stop the alarm or continue processing to silence it.": "每组三声闹铃结束后静音 15 秒，再次响铃。点击停止响铃或继续处理即可关闭。",
+    "For unattended processing, also turn off the pauses before and after translation in the sidebar.": "如需全程自动处理，请同时关闭侧栏中的翻译前暂停和翻译后暂停。"
 }

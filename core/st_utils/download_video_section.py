@@ -44,6 +44,27 @@ def clear_output_dir():
 def download_video_section():
     st.header(t("a. Download or Upload Video"))
     with st.container(border=True):
+        auto_start_translation = st.checkbox(
+            t("Auto-start translation draft after download or upload"),
+            value=load_key("auto_start_translation_after_video"),
+            key="auto_start_translation_after_video",
+            help=t("When download or upload completes, immediately generate the translation draft in stage b."),
+        )
+        if auto_start_translation != load_key("auto_start_translation_after_video"):
+            update_key("auto_start_translation_after_video", auto_start_translation)
+        auto_start_dubbing = st.checkbox(
+            t("Auto-start dubbing after subtitles complete"),
+            value=load_key("auto_start_dubbing_after_subtitles"),
+            key="text_processing_auto_start_dubbing",
+            help=t("When subtitle processing finishes, automatically start stage c. Dubbing."),
+        )
+        if auto_start_dubbing != load_key("auto_start_dubbing_after_subtitles"):
+            update_key("auto_start_dubbing_after_subtitles", auto_start_dubbing)
+            st.rerun()
+        if auto_start_translation and auto_start_dubbing and (
+            load_key("pause_before_translate") or load_key("pause_after_translate")
+        ):
+            st.info(t("For unattended processing, also turn off the pauses before and after translation in the sidebar."))
         try:
             video_file = find_video_files()
             st.video(video_file)
@@ -114,6 +135,7 @@ def download_video_section():
                             st.error(str(e))
                             return False
                         else:
+                            st.session_state["_auto_start_translation_pending"] = auto_start_translation
                             st.rerun()
 
             uploaded_file = st.file_uploader(t("Or upload video"), type=load_key("allowed_video_formats") + load_key("allowed_audio_formats"))
@@ -130,6 +152,7 @@ def download_video_section():
 
                 if ext.lower() in load_key("allowed_audio_formats"):
                     convert_audio_to_video(os.path.join(OUTPUT_DIR, clean_name))
+                st.session_state["_auto_start_translation_pending"] = auto_start_translation
                 st.rerun()
             else:
                 return False
