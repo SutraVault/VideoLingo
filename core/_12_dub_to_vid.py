@@ -81,24 +81,16 @@ def _build_text_watermark_filter() -> str:
         rprint(f"[yellow]Watermark disabled because config is invalid: {exc}[/yellow]")
         return ""
 
-def merge_video_audio():
+def merge_video_audio(subtitle_mode=None):
     """Merge video and audio, and reduce video volume"""
     VIDEO_FILE = find_video_files()
     background_file = _BACKGROUND_AUDIO_FILE
     watermark_filter = _build_text_watermark_filter()
     
-    if not load_key("burn_subtitles") and not watermark_filter:
-        rprint("[bold yellow]Warning: A 0-second black video will be generated as a placeholder as subtitles are not burned in.[/bold yellow]")
-
-        # Create a black frame
-        frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(DUB_VIDEO, fourcc, 1, (1920, 1080))
-        out.write(frame)
-        out.release()
-
-        rprint("[bold green]Placeholder video has been generated.[/bold green]")
-        return
+    if subtitle_mode is None:
+        subtitle_mode = 'bilingual' if load_key('burn_subtitles') else 'none'
+    if subtitle_mode not in ('translation', 'bilingual', 'none'):
+        raise ValueError('Invalid dubbing subtitle mode')
 
     # Normalize dub audio
     normalized_dub_audio = 'output/normalized_dub.wav'
@@ -115,17 +107,18 @@ def merge_video_audio():
         f'[0:v]scale={TARGET_WIDTH}:{TARGET_HEIGHT}:force_original_aspect_ratio=decrease,'
         f'pad={TARGET_WIDTH}:{TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2'
     )
-    if load_key("burn_subtitles"):
+    if subtitle_mode == 'bilingual':
         video_filter += (
             f",subtitles={SRC_SUB_FILE}:force_style='FontSize={SRC_FONT_SIZE},"
             f"FontName={FONT_NAME},PrimaryColour={SRC_FONT_COLOR},"
             f"OutlineColour={SRC_OUTLINE_COLOR},OutlineWidth={SRC_OUTLINE_WIDTH},"
-            f"ShadowColour={SRC_SHADOW_COLOR},BorderStyle=1',"
-            f"subtitles={DUB_SUB_FILE}:force_style='FontSize={TRANS_FONT_SIZE},"
+            f"ShadowColour={SRC_SHADOW_COLOR},BorderStyle=1'")
+    if subtitle_mode != 'none':
+        video_filter += (
+            f",subtitles={DUB_SUB_FILE}:force_style='FontSize={TRANS_FONT_SIZE},"
             f"FontName={TRANS_FONT_NAME},PrimaryColour={TRANS_FONT_COLOR},"
             f"OutlineColour={TRANS_OUTLINE_COLOR},OutlineWidth={TRANS_OUTLINE_WIDTH},"
-            f"BackColour={TRANS_BACK_COLOR},Alignment=2,MarginV=27,BorderStyle=4'"
-        )
+            f"BackColour={TRANS_BACK_COLOR},Alignment=2,MarginV=27,BorderStyle=4'")
     video_filter += f"{watermark_filter}[v]"
     
     cmd = [
