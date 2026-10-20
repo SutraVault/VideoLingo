@@ -1,4 +1,14 @@
 import json
+from functools import lru_cache
+from pathlib import Path
+
+TRANSLATIONS_DIR=Path(__file__).resolve().parent
+
+
+@lru_cache(maxsize=32)
+def _read_translations(path,mtime_ns,size):
+    with open(path,'r',encoding='utf-8') as stream:
+        return json.load(stream)
 
 DISPLAY_LANGUAGES = {
     "🇬🇧 English": "en",
@@ -12,8 +22,9 @@ DISPLAY_LANGUAGES = {
 
 # Load the language file based on user selection
 def load_translations(language="en"):
-    with open(f'translations/{language}.json', 'r', encoding='utf-8') as file:
-        return json.load(file)
+    path=TRANSLATIONS_DIR/f'{language}.json'
+    stat=path.stat()
+    return dict(_read_translations(str(path),stat.st_mtime_ns,stat.st_size))
 
 # Function to fetch the translation
 def translate(key):
