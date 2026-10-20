@@ -232,78 +232,38 @@ def _sort_reference_path(path):
         return (1, path.stem)
 
 
-def _shared_reference_audio(settings, current_dir):
+def _shared_reference_audio(settings, current_dir, preferred=None):
+    from core.tts_backend.reference_audio import prepare_reference
+
     fallback = current_dir / "output/audio/refers/1.wav"
     _ensure_reference_audio(fallback)
-
-    # IndexTTS2 is highly sensitive to prompt cadence. Preserve its original
-    # VideoLingo behavior: use the first extracted reference even when it is
-    # shorter than the newer IndexTTS2.5 recommendation. In this project the
-    # automatic switch from 1.wav to 3.wav expanded an identical line from
-    # 2.83s to 8.66s and copied long pauses into most generated speech.
-    if str(settings.get("version", "2")) == "2":
-        return fallback
-
-    refers_dir = fallback.parent
-    min_duration = float(settings.get("min_refer_duration", 0) or 0)
-    max_duration = float(settings.get("max_refer_duration", 0) or 0)
-    cache_key = (
-        str(settings.get("version", "2.5")),
-        str(refers_dir.resolve()),
-        min_duration,
-        max_duration,
-    )
-    cached_path = _SHARED_REFERENCE_CACHE.get(cache_key)
-    if cached_path is not None and cached_path.exists():
-        return cached_path
-    candidates = []
-
-    for path in sorted(refers_dir.glob("*.wav"), key=_sort_reference_path):
-        duration = _wav_duration(path)
-        if duration <= 0:
-            continue
-        candidates.append((path, duration))
-        if duration >= min_duration and (max_duration <= 0 or duration <= max_duration):
-            if path != fallback:
-                rprint(
-                    f"[yellow]IndexTTS shared reference {fallback.name} is short "
-                    f"({_wav_duration(fallback):.2f}s); using {path.name} ({duration:.2f}s).[/yellow]"
-                )
-            _SHARED_REFERENCE_CACHE[cache_key] = path
-            return path
-
-    if candidates:
-        path, duration = max(candidates, key=lambda item: item[1])
-        if path != fallback:
-            rprint(
-                f"[yellow]No IndexTTS reference met min_refer_duration={min_duration:.1f}s; "
-                f"using longest reference {path.name} ({duration:.2f}s).[/yellow]"
-            )
-        _SHARED_REFERENCE_CACHE[cache_key] = path
-        return path
-
-    _SHARED_REFERENCE_CACHE[cache_key] = fallback
-    return fallback
+    candidates = sorted(fallback.parent.glob("*.wav"), key=_sort_reference_path)
+    if preferred is not None and preferred.exists():
+        candidates = [preferred] + [path for path in candidates if path != preferred]
+    reference, details = prepare_reference(candidates, fallback.parent / "validated")
+    cache_key = str(reference)
+    if cache_key not in _SHARED_REFERENCE_CACHE:
+        rprint(
+            f"[cyan]Validated IndexTTS reference: {Path(details['source']).name}, "
+            f"{details['duration_ms'] / 1000:.2f}s, "
+            f"longest pause {details['longest_internal_pause_ms']}ms, "
+            f"trimmed {details['trimmed_ms']}ms.[/cyan]"
+        )
+        _SHARED_REFERENCE_CACHE[cache_key] = reference
+    return reference
 
 
 def _reference_audio_for(number):
     settings = _active_settings()
     refer_mode = int(settings.get("refer_mode", 3))
     current_dir = Path.cwd()
-
     if refer_mode == 2:
         return _shared_reference_audio(settings, current_dir)
-    elif refer_mode == 3:
-        ref_audio_path = current_dir / f"output/audio/refers/{number}.wav"
-    else:
-        raise ValueError("Invalid indextts.refer_mode. Choose 2 or 3.")
-
-    _ensure_reference_audio(ref_audio_path)
-    if not ref_audio_path.exists() and refer_mode == 3:
-        fallback = current_dir / "output/audio/refers/1.wav"
-        _ensure_reference_audio(fallback)
-        return fallback
-    return ref_audio_path
+    if refer_mode == 3:
+        preferred = current_dir / f"output/audio/refers/{number}.wav"
+        _ensure_reference_audio(preferred)
+        return _shared_reference_audio(settings, current_dir, preferred=preferred)
+    raise ValueError("Invalid indextts.refer_mode. Choose 2 or 3.")
 
 
 def indextts_tts(text, save_path, ref_audio_path, duration_factor=None):

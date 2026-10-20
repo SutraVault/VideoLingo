@@ -28,7 +28,14 @@ def normalize_tts_text(text):
     if not year_digit_reading:
         return text
 
-    digit_names = str.maketrans("0123456789", "〇一二三四五六七八九")
+    # Use the spoken character 零: 〇 can be treated as an unknown token by TTS.
+    # Also repair already-normalized year text when rebuilding saved tasks.
+    text = re.sub(
+        r'(?<![A-Za-z0-9零〇一二三四五六七八九])([零〇一二三四五六七八九]{4})\s*(?=年)',
+        lambda match: match.group(1).replace("〇", "零"),
+        text,
+    )
+    digit_names = str.maketrans("0123456789", "零一二三四五六七八九")
 
     def replace_year(match):
         return match.group(1).translate(digit_names)
@@ -37,7 +44,7 @@ def normalize_tts_text(text):
     # cardinal numbers. Also exclude model names such as M1918/A1917 and
     # longer numeric identifiers.
     return re.sub(
-        r'(?<![A-Za-z0-9])((?:1[0-9]|20)[0-9]{2})(?![A-Za-z0-9])(?=\s*年)',
+        r'(?<![A-Za-z0-9])((?:1[0-9]|20)[0-9]{2})(?![A-Za-z0-9])\s*(?=年)',
         replace_year,
         text,
     )
