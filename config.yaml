@@ -360,3 +360,13 @@ language_split_with_space:
 language_split_without_space:
 - 'zh'
 - 'ja'
+workflow:
+  original: true
+  dubbing: true
+  original_subtitles: translation
+  dub_subtitles: translation
+  review_translation: false
+  review_terms: false
+  auto_start: true
+  voice_revision: ''
+  translation_revision: ''

@@ -5,6 +5,7 @@ import os, sys, time
 import streamlit.components.v1 as components
 from core.st_utils.imports_and_utils import *
 from core.st_utils.task_runner import TaskRunner
+from core.st_utils import workflow_ui
 from core.st_utils import handoff_alarm
 # Also upgrade cached modules in sessions that predate the alarm change.
 if getattr(handoff_alarm, "ALARM_VERSION", 0) != 4:
@@ -909,16 +910,40 @@ def main():
         f"<p style='font-size: 20px; color: #808080;'>{welcome_text}</p>",
         unsafe_allow_html=True,
     )
-    # add settings
+    legacy_active = any(getattr(st.session_state.get(key), "is_active", False)
+                        for key in ("_text_runner", "_audio_runner"))
     with st.sidebar:
-        page_setting()
+        if workflow_ui.any_active() or legacy_active:
+            st.info(t("Processing settings are locked while a task is active."))
+        else:
+            page_setting()
         st.markdown(give_star_button, unsafe_allow_html=True)
-    video_ready = download_video_section()
-    if video_ready:
-        source_subtitle_section()
+    if legacy_active:
+        st.info(t("An earlier task is still running. Its controls remain available until it finishes."))
         text_processing_section()
         audio_processing_section()
+        return
+    try:
+        from core._1_ytdlp import find_video_files
+        source = find_video_files()
+        job = workflow_ui.job_for(source)
+    except ValueError:
+        job = None
+    workflow_ui.render_controls(job)
+    workflow_ui.render_preview(job)
+    video_ready = download_video_section(locked=workflow_ui.any_active())
+    if video_ready:
+        if job is None:
+            from core._1_ytdlp import find_video_files
+            job = workflow_ui.job_for(find_video_files())
+        with st.expander(t("Optional: Use Existing Source Subtitles")):
+            if not workflow_ui.any_active():
+                source_subtitle_section()
+            else:
+                st.caption(t("Source subtitles cannot be replaced while a task is active."))
+        workflow_ui.render_sections(job, globals())
         _render_timing_report()
+
 
 
 if __name__ == "__main__":

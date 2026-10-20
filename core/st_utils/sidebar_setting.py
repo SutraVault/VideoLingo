@@ -343,16 +343,7 @@ def page_setting():
             update_key("demucs", demucs)
             st.rerun()
 
-        burn_subtitles = st.toggle(
-            t("Burn-in Subtitles"),
-            value=load_key("burn_subtitles"),
-            help=t(
-                "Whether to burn subtitles into the video, will increase processing time"
-            ),
-        )
-        if burn_subtitles != load_key("burn_subtitles"):
-            update_key("burn_subtitles", burn_subtitles)
-            st.rerun()
+        st.caption(t("Video subtitle visibility is controlled in Workflow control."))
 
         reflect_translate = st.toggle(
             t("Reflect Translate"),
@@ -363,17 +354,6 @@ def page_setting():
         )
         if reflect_translate != load_key("reflect_translate"):
             update_key("reflect_translate", reflect_translate)
-            st.rerun()
-
-        pause_after_translate = st.toggle(
-            t("Pause After Translate"),
-            value=load_key("pause_after_translate"),
-            help=t(
-                "Pause after generating translation_results.xlsx so you can proofread before the next steps"
-            ),
-        )
-        if pause_after_translate != load_key("pause_after_translate"):
-            update_key("pause_after_translate", pause_after_translate)
             st.rerun()
 
         llm_proofread_enabled = st.toggle(

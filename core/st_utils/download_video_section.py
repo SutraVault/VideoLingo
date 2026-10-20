@@ -41,30 +41,10 @@ def clear_output_dir():
             "Stop any running TTS/FFmpeg process before reselecting if stale files cause issues."
         )
 
-def download_video_section():
+def download_video_section(locked=False):
     st.header(t("a. Download or Upload Video"))
     with st.container(border=True):
-        auto_start_translation = st.checkbox(
-            t("Auto-start translation draft after download or upload"),
-            value=load_key("auto_start_translation_after_video"),
-            key="auto_start_translation_after_video",
-            help=t("When download or upload completes, immediately generate the translation draft in stage b."),
-        )
-        if auto_start_translation != load_key("auto_start_translation_after_video"):
-            update_key("auto_start_translation_after_video", auto_start_translation)
-        auto_start_dubbing = st.checkbox(
-            t("Auto-start dubbing after subtitles complete"),
-            value=load_key("auto_start_dubbing_after_subtitles"),
-            key="text_processing_auto_start_dubbing",
-            help=t("When subtitle processing finishes, automatically start stage c. Dubbing."),
-        )
-        if auto_start_dubbing != load_key("auto_start_dubbing_after_subtitles"):
-            update_key("auto_start_dubbing_after_subtitles", auto_start_dubbing)
-            st.rerun()
-        if auto_start_translation and auto_start_dubbing and (
-            load_key("pause_before_translate") or load_key("pause_after_translate")
-        ):
-            st.info(t("For unattended processing, also turn off the pauses before and after translation in the sidebar."))
+        auto_start_translation = load_key("auto_start_translation_after_video")
         try:
             video_file = find_video_files()
             st.video(video_file)
@@ -76,7 +56,7 @@ def download_video_section():
                     st.success(subtitle_notice)
                 else:
                     st.info(subtitle_notice)
-            if st.button(t("Delete and Reselect"), key="delete_video_button"):
+            if st.button(t("Delete and Reselect"), key="delete_video_button", disabled=locked):
                 os.remove(video_file)
                 clear_output_dir()
                 sleep(1)
