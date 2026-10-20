@@ -120,7 +120,7 @@ def process_transcription(result: Dict) -> pd.DataFrame:
                 rprint(f"[yellow]⚠️ Warning: Keeping alignment item longer than 30 characters: {word['word']}[/yellow]")
                 
             # ! For French, we need to convert guillemets to empty strings
-            word["word"] = word["word"].replace('»', '').replace('«', '')
+            word["word"] = word["word"].replace('»', '').replace('«', '').strip()
             
             if 'start' not in word and 'end' not in word:
                 if all_words:

@@ -11,8 +11,8 @@ from core.utils.models import _3_1_SPLIT_BY_NLP, _3_2_SPLIT_BY_MEANING
 console = Console()
 
 def tokenize_sentence(sentence, nlp):
-    doc = nlp(sentence)
-    return [token.text for token in doc]
+    doc = nlp(" ".join(str(sentence).split()))
+    return [token.text for token in doc if not token.is_space]
 
 def find_split_positions(original, modified):
     split_positions = []
@@ -171,6 +171,7 @@ def parallel_split_sentences(sentences, max_length, max_workers, nlp, retry_atte
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         for index, sentence in enumerate(sentences):
+            sentence = " ".join(str(sentence).split())
             # Use tokenizer to split the sentence
             tokens = tokenize_sentence(sentence, nlp)
             # print("Tokenization result:", tokens)
