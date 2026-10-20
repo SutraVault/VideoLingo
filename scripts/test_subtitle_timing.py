@@ -19,6 +19,18 @@ def functions(path, **scope):
     return scope
 
 class TimestampTests(unittest.TestCase):
+    def test_estimated_split_start_does_not_skip_short_word_before_acronym(self):
+        words = pd.DataFrame({
+            "text": ["Group", "Corporation", "CETC"],
+            "start": [358.875, 359.076, 360.258],
+            "end": [359.056, 359.677, 361.260],
+        })
+        rows = pd.DataFrame({"Source": ["Group", "Corporation,", "CETC."]})
+        result = self.alignment()["get_sentence_timestamps"](
+            words, rows, [(357.59, 360.69), (360.69, 361.64), (361.64, 361.983)]
+        )
+        self.assertEqual(result, [(358.875, 359.056), (359.076, 359.677), (360.258, 361.260)])
+
     def alignment(self):
         return functions("core/_6_gen_sub.py", pd=pd, re=re, SequenceMatcher=SequenceMatcher)
 

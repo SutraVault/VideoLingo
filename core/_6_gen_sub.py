@@ -127,7 +127,11 @@ def get_sentence_timestamps(df_words, df_sentences, fallback_timestamps=None):
             eligible = [(left, right) for left, right, start, end in word_character_ranges
                         if end >= fallback[0] - 1.0 and start <= fallback[1] + 1.0]
             if eligible:
-                current_pos = max(current_pos, eligible[0][0])
+                # Split-row fallbacks are apportioned by character count, not
+                # speech duration. Moving the cursor to their estimated start
+                # can skip the next real word (especially a short acronym tail).
+                # Preserve sequential matching; the upper bound still prevents
+                # jumping to a later repetition outside the reviewed passage.
                 search_end = eligible[-1][1]
             else:
                 search_end = current_pos
