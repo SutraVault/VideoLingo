@@ -11,7 +11,7 @@ display_language: "zh-CN"
 
 # API settings
 api:
-  key: 'your_openai_compatible_api_key'
+  key: 'your_api_key'
   base_url: 'https://openrouter.ai/api/v1'
   model: 'deepseek/deepseek-v4-flash'
   llm_support_json: true
@@ -60,9 +60,9 @@ whisper:
   # Whisper running mode ["local", "cloud", "elevenlabs"]. Specifies where to run, cloud uses 302.ai API
   runtime: 'local'
   # 302.ai API key
-  whisperX_302_api_key: 'your_302_api_key'
+  whisperX_302_api_key: 'your_api_key'
   # ElevenLabs API key (experimental)
-  elevenlabs_api_key: 'your_elevenlabs_api_key'
+  elevenlabs_api_key: 'your_api_key'
   # Local WhisperX speech-detection thresholds. Lower values reduce missed
   # quiet speech, at the cost of potentially admitting more background audio.
   vad_onset: 0.35
@@ -132,7 +132,7 @@ llm_proofread:
   max_sentence_lines: 28 # Safety cap when source punctuation is missing.
   override_api: true
   api:
-    key: 'your_proofread_api_key'
+    key: 'your_api_key'
     base_url: 'https://openrouter.ai/api/v1'
     model: 'deepseek/deepseek-v4-flash'
     llm_support_json: true
@@ -153,7 +153,7 @@ tts_method: 'indextts'
 # SiliconFlow FishTTS
 sf_fish_tts:
   # SiliconFlow API key
-  api_key: 'YOUR_API_KEY'
+  api_key: 'your_api_key'
   # only for mode "preset"
   voice: 'anna'
   # *only for mode "custom", dont set manually
@@ -164,17 +164,17 @@ sf_fish_tts:
 
 # OpenAI TTS-1 API configuration, 302.ai API only
 openai_tts:
-  api_key: 'YOUR_302_API_KEY'
+  api_key: 'your_api_key'
   voice: 'alloy'
 
 # Azure configuration, 302.ai API only
 azure_tts:
-  api_key: 'YOUR_302_API_KEY'
+  api_key: 'your_api_key'
   voice: 'zh-CN-YunfengNeural'
 
 # FishTTS configuration, 302.ai API only
 fish_tts:
-  api_key: 'YOUR_302_API_KEY'
+  api_key: 'your_api_key'
   character: 'AD学姐'
   character_id_dict:
     'AD学姐': '7f92f8afb8ec43bf81429cc1c9199cb1'
@@ -182,7 +182,7 @@ fish_tts:
 
 # SiliconFlow CosyVoice2 Clone
 sf_cosyvoice2:
-  api_key: 'YOUR_SF_KEY'
+  api_key: 'your_api_key'
 
 # Edge TTS configuration
 edge_tts:

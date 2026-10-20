@@ -175,3 +175,7 @@ installer_files/
 logs/
 # Installed JavaScript dependencies
 node_modules/
+
+# Local investigation and generated deliverables
+/work/
+/outputs/
