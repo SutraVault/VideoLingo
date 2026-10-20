@@ -69,12 +69,14 @@ whisper:
   vad_offset: 0.25
   # Retry decoding at progressively higher temperatures when a block fails.
   temperatures: [0, 0.2, 0.4, 0.6, 0.8, 1.0]
-  # Run a second, more sensitive pass and add only segments not covered by the
-  # primary pass. This improves recall for quiet speech and speech under music.
+  # Run a sensitive pass, merge local text, and retry conflicting blocks.
   recovery_enabled: true
   recovery_vad_onset: 0.20
   recovery_vad_offset: 0.15
-  recovery_max_overlap_ratio: 0.25
+  recovery_max_overlap_ratio: 0.25  # Legacy setting; local text merging supersedes it.
+  # Retry suspicious word alignment on raw audio without VAD.
+  alignment_repair_enabled: true
+  max_word_seconds: 2.5
 
 # Whether to burn subtitles into the video
 burn_subtitles: true

@@ -29,6 +29,7 @@ torch.load = _patched_torch_load
 # Now safe to import whisperx and the rest of the application
 # =============================================================================
 import whisperx
+from core.asr_backend.quality import merge_recovery, suspicious_windows, replace_window, recover_with_context
 from whisperx.audio import load_audio as _whisperx_load_audio, SAMPLE_RATE as _WHISPERX_SR
 from rich import print as rprint
 from core.utils import *
@@ -42,39 +43,9 @@ def _optional_key(key, default):
         return default
 
 
-def _segment_overlap_ratio(candidate, existing_segments):
-    """Return how much of candidate's duration is covered by existing output."""
-    start = float(candidate.get("start", 0))
-    end = float(candidate.get("end", start))
-    duration = max(end - start, 0.001)
-    overlap = 0.0
-    for segment in existing_segments:
-        other_start = float(segment.get("start", 0))
-        other_end = float(segment.get("end", other_start))
-        overlap += max(0.0, min(end, other_end) - max(start, other_start))
-    return min(overlap / duration, 1.0)
-
-
 def _merge_recovery_segments(primary_segments, recovery_segments, max_overlap_ratio):
-    """Add only genuinely uncovered recovery segments and keep time order."""
-    merged = list(primary_segments)
-    known_text = {
-        " ".join(str(segment.get("text", "")).lower().split())
-        for segment in primary_segments
-        if str(segment.get("text", "")).strip()
-    }
-    added = []
-    for segment in recovery_segments:
-        text = " ".join(str(segment.get("text", "")).lower().split())
-        if not text or text in known_text:
-            continue
-        if _segment_overlap_ratio(segment, primary_segments) > max_overlap_ratio:
-            continue
-        merged.append(segment)
-        added.append(segment)
-        known_text.add(text)
-    merged.sort(key=lambda item: (float(item.get("start", 0)), float(item.get("end", 0))))
-    return merged, added
+    """Compatibility entry point; merge by local text instead of overlap ratio."""
+    return merge_recovery(primary_segments, recovery_segments)
 
 @except_handler("failed to check hf mirror", default_return=None)
 def check_hf_mirror():
@@ -214,16 +185,56 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     # 2. align by vocal audio
     # -------------------------
     align_start_time = time.time()
+    detected_language = result['language']
     # Align timestamps using vocal audio
     model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
+    conflict_windows = suspicious_windows(result['segments'], len(raw_audio_segment) / _WHISPERX_SR)
     result = whisperx.align(result["segments"], model_a, metadata, vocal_audio_segment, device, return_char_alignments=False)
     align_time = time.time() - align_start_time
     rprint(f"[cyan]⏱️ time align:[/cyan] {align_time:.2f}s")
 
-    # Free GPU resources again
-    torch.cuda.empty_cache()
-    del model_a
+    # Keep the small acoustic model until local recovery has also been aligned.
 
+    if _optional_key('whisper.alignment_repair_enabled', True):
+        threshold = float(_optional_key('whisper.max_word_seconds', 2.5))
+        windows = suspicious_windows(result['segments'], len(raw_audio_segment) / _WHISPERX_SR, threshold)
+        windows += conflict_windows
+        # Merge windows, including conflicts discovered before alignment.
+        windows = suspicious_windows([{'start':a,'end':b,'recovery_conflict':True} for a,b in windows], len(raw_audio_segment)/_WHISPERX_SR, threshold, padding=0)
+        if windows:
+            from faster_whisper import WhisperModel
+            retry_model = WhisperModel(model_name, device=device, compute_type=compute_type, download_root=MODEL_DIR)
+            def decode_retry(a,b):
+                retry_segments, _ = retry_model.transcribe(raw_audio_segment[int(a*_WHISPERX_SR):int(b*_WHISPERX_SR)], language=detected_language, beam_size=5, vad_filter=False, word_timestamps=True, condition_on_previous_text=False)
+                recovered=[]
+                for s in retry_segments:
+                    words=[{'word':w.word.strip(),'start':w.start+a,'end':w.end+a,'score':w.probability} for w in s.words or [] if w.word.strip()]
+                    if words:
+                        recovered.append({'start':s.start+a,'end':s.end+a,'text':s.text,'words':words})
+                return recovered
+            def realign_retry(segments,a,b):
+                # Recovery timestamps are relative to this full audio block.
+                # Use raw audio, matching the independently decoded speech.
+                return whisperx.align(segments,model_a,metadata,raw_audio_segment,device,return_char_alignments=False)['segments']
+            for a,b in windows:
+                recovered,repair_start,repair_end,diagnostics = recover_with_context(decode_retry,a,b,len(raw_audio_segment)/_WHISPERX_SR,threshold,realign=realign_retry)
+                # Persist the exact failed words/crop bounds, including successful
+                # later attempts. Segment times in this log are clip-relative.
+                import json
+                from pathlib import Path
+                diagnostic_dir = Path('output/log/asr_quality')
+                diagnostic_dir.mkdir(parents=True,exist_ok=True)
+                diagnostic_path = diagnostic_dir/f'recovery_{start+a:.3f}_{start+b:.3f}.json'
+                diagnostic_path.write_text(json.dumps({'clip_offset':start,'resolved':recovered is not None,'attempts':diagnostics},ensure_ascii=False,indent=2),encoding='utf-8')
+                if recovered is None:
+                    raise ValueError(f'ASR quality check unresolved at {start+a:.2f}-{start+b:.2f}s; refusing to save faulty alignment')
+                result['segments'] = replace_window(result['segments'],recovered,repair_start,repair_end)
+                rprint(f'[green]Recovered suspicious alignment at {start+repair_start:.2f}-{start+repair_end:.2f}s ({len(diagnostics)} attempt(s))[/green]')
+            del retry_model
+            torch.cuda.empty_cache()
+
+    del model_a
+    torch.cuda.empty_cache()
     # Adjust timestamps
     for segment in result['segments']:
         segment['start'] += start
