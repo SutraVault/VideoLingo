@@ -1,7 +1,10 @@
+from core.utils.project_paths import project_output
 import os
 import json
 import math
 import time
+import builtins
+import tempfile
 from datetime import datetime
 from threading import Lock
 import json_repair
@@ -13,8 +16,21 @@ from rich import print as rprint
 # cache gpt response
 # ------------
 
-LOCK = Lock()
-GPT_LOG_FOLDER = 'output/gpt_log'
+if not hasattr(builtins, '_videolingo_llm_log_lock'):
+    builtins._videolingo_llm_log_lock = Lock()
+LOCK = builtins._videolingo_llm_log_lock
+GPT_LOG_FOLDER = project_output('output/gpt_log')
+
+
+def _atomic_json(path, value):
+    """A cancelled process must leave the previous complete cache readable."""
+    fd, temp = tempfile.mkstemp(dir=os.path.dirname(path), suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump(value, stream, ensure_ascii=False, indent=4)
+        os.replace(temp, path)
+    finally:
+        if os.path.exists(temp):os.unlink(temp)
 
 
 def _load_optional_key(key, default=None):
@@ -69,8 +85,7 @@ def _write_usage_logs(event):
         with open(events_file, 'r', encoding='utf-8') as f:
             events = json.load(f)
     events.append(event)
-    with open(events_file, 'w', encoding='utf-8') as f:
-        json.dump(events, f, ensure_ascii=False, indent=4)
+    _atomic_json(events_file, events)
 
     summary = {
         "updated_at": datetime.now().isoformat(timespec="seconds"),
@@ -101,8 +116,7 @@ def _write_usage_logs(event):
         bucket["estimated_total_tokens"] += item.get("estimated_total_tokens", 0)
         bucket["exact_total_tokens"] += item.get("total_tokens") or 0
 
-    with open(summary_file, 'w', encoding='utf-8') as f:
-        json.dump(summary, f, ensure_ascii=False, indent=4)
+    _atomic_json(summary_file, summary)
 
 def _save_cache(model, prompt, resp_content, resp_type, resp, message=None, log_title="default", usage=None, base_url=None, request_variant=None):
     with LOCK:
@@ -114,8 +128,7 @@ def _save_cache(model, prompt, resp_content, resp_type, resp, message=None, log_
                 logs = json.load(f)
         usage = _to_plain_dict(usage)
         logs.append({"model": model, "base_url": base_url, "request_variant": request_variant, "prompt": prompt, "resp_content": resp_content, "resp_type": resp_type, "resp": resp, "message": message, "usage": usage})
-        with open(file, 'w', encoding='utf-8') as f:
-            json.dump(logs, f, ensure_ascii=False, indent=4)
+        _atomic_json(file, logs)
         _write_usage_logs(_usage_event(model, prompt, resp_content, resp_type, usage, log_title))
 
 def _load_cache(prompt, resp_type, log_title, model=None, base_url=None, request_variant=None):
@@ -185,7 +198,8 @@ def _ask_gpt_once(
             rprint("use cache response")
             return cached
 
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    # ask_gpt owns retries; SDK retries would multiply the waiting time.
+    client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
     llm_support_json = api_config.get("llm_support_json")
     if llm_support_json is None:
         llm_support_json = load_key("api.llm_support_json")
@@ -196,7 +210,7 @@ def _ask_gpt_once(
         model=model,
         messages=messages,
         response_format=response_format,
-        timeout=300
+        timeout=120
     )
     if extra_body:
         params["extra_body"] = extra_body
@@ -255,7 +269,7 @@ def ask_gpt(
     original_prompt = prompt
     current_prompt = prompt
     last_exception = None
-    max_attempts = 6
+    max_attempts = 3
 
     for attempt in range(1, max_attempts + 1):
         try:

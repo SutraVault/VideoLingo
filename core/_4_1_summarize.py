@@ -1,11 +1,12 @@
 import json
+import os
 from core.prompts import get_summary_prompt
 import pandas as pd
 from core.utils import *
 from core.utils.llm_stage_utils import stage_api_config
 from core.utils.models import _3_2_SPLIT_BY_MEANING, _4_1_TERMINOLOGY
 
-CUSTOM_TERMS_PATH = 'custom_terms.xlsx'
+CUSTOM_TERMS_PATH = os.environ.get('VL_TERMS_PATH', 'custom_terms.xlsx')
 
 def combine_chunks():
     """Combine the text chunks identified by whisper into a single long text"""

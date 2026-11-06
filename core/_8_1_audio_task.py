@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 import datetime
 import re
 import pandas as pd
@@ -12,8 +13,8 @@ from core.utils.llm_stage_utils import stage_api_config
 console = Console()
 speed_factor = load_key("speed_factor")
 
-TRANS_SUBS_FOR_AUDIO_FILE = 'output/audio/trans_subs_for_audio.srt'
-SRC_SUBS_FOR_AUDIO_FILE = 'output/audio/src_subs_for_audio.srt'
+TRANS_SUBS_FOR_AUDIO_FILE = project_output('output/audio/trans_subs_for_audio.srt')
+SRC_SUBS_FOR_AUDIO_FILE = project_output('output/audio/src_subs_for_audio.srt')
 ESTIMATOR = None
 
 

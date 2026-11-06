@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 import spacy
 from spacy.cli import download
 from core.utils import rprint, load_key, except_handler
@@ -28,6 +29,6 @@ def init_nlp():
 # --------------------
 # define the intermediate files
 # --------------------
-SPLIT_BY_COMMA_FILE = "output/log/split_by_comma.txt"
-SPLIT_BY_CONNECTOR_FILE = "output/log/split_by_connector.txt"
-SPLIT_BY_MARK_FILE = "output/log/split_by_mark.txt"
+SPLIT_BY_COMMA_FILE = project_output("output/log/split_by_comma.txt")
+SPLIT_BY_CONNECTOR_FILE = project_output("output/log/split_by_connector.txt")
+SPLIT_BY_MARK_FILE = project_output("output/log/split_by_mark.txt")

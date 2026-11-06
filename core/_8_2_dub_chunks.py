@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 import datetime
 import os
 import re
@@ -9,8 +10,8 @@ from core.tts_backend.estimate_duration import init_estimator, estimate_duration
 from core.utils import *
 from core.utils.models import *
 
-SRC_SRT = "output/audio/src_subs_for_audio.srt"
-TRANS_SRT = "output/audio/trans_subs_for_audio.srt"
+SRC_SRT = project_output("output/audio/src_subs_for_audio.srt")
+TRANS_SRT = project_output("output/audio/trans_subs_for_audio.srt")
 MAX_MERGE_COUNT = 5
 ESTIMATOR = None
 

@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 import os
 import warnings
 import time
@@ -222,7 +223,7 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
                 # later attempts. Segment times in this log are clip-relative.
                 import json
                 from pathlib import Path
-                diagnostic_dir = Path('output/log/asr_quality')
+                diagnostic_dir = Path(project_output('output/log/asr_quality'))
                 diagnostic_dir.mkdir(parents=True,exist_ok=True)
                 diagnostic_path = diagnostic_dir/f'recovery_{start+a:.3f}_{start+b:.3f}.json'
                 diagnostic_path.write_text(json.dumps({'clip_offset':start,'resolved':recovered is not None,'attempts':diagnostics},ensure_ascii=False,indent=2),encoding='utf-8')

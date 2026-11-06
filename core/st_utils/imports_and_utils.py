@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 import os
 import streamlit as st
 import io, zipfile
@@ -7,7 +8,7 @@ from translations.translations import translate as t
 
 def download_subtitle_zip_button(text: str):
     zip_buffer = io.BytesIO()
-    output_dir = "output"
+    output_dir = project_output("output")
     
     with zipfile.ZipFile(zip_buffer, "w") as zip_file:
         for file_name in os.listdir(output_dir):

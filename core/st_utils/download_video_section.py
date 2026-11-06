@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 import os
 import re
 import shutil
@@ -10,7 +11,7 @@ from core.utils.srt_import import import_srt_to_cleaned_chunks
 from core.utils import *
 from translations.translations import translate as t
 
-OUTPUT_DIR = "output"
+OUTPUT_DIR = project_output("output")
 
 def clear_output_dir():
     if not os.path.exists(OUTPUT_DIR):
@@ -52,7 +53,7 @@ def download_video_section(locked=False):
                 "youtube_creator_subtitle_notice", None
             )
             if subtitle_notice:
-                if os.path.exists("output/source_subtitle.srt"):
+                if os.path.exists(project_output("output/source_subtitle.srt")):
                     st.success(subtitle_notice)
                 else:
                     st.info(subtitle_notice)

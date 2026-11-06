@@ -17,6 +17,49 @@ def module(name):
 quality=module('quality');cache=module('cache')
 
 class QualityTests(unittest.TestCase):
+    def test_decoder_fallback_restores_touching_neighbour_as_group(self):
+        decoded=[{'words':[{'word':'and','start':1,'end':2}, {'word':'then','start':2,'end':2.7}, {'word':'it','start':2.7,'end':5.6}]}]
+        aligned=[{'words':[{'word':'and','start':1,'end':2.3}, {'word':'then','start':2.3,'end':5.6}, {'word':'it','start':5.7,'end':5.8}]}]
+        result=quality.preserve_valid_decoder_timing(aligned,decoded)
+        self.assertEqual(result[0]['words'][0]['end'],2)
+        self.assertEqual(result[0]['words'][1]['end'],2.7)
+        self.assertFalse(quality.suspicious_windows(result,10))
+
+    def test_broad_retry_repairs_only_remaining_local_defect(self):
+        calls=[]
+        def decode(a,b):
+            calls.append((a,b))
+            if b-a>30:
+                return [{'start':10,'end':90,'text':'before wrong after','words':[
+                    {'word':'before','start':10,'end':11},
+                    {'word':'wrong','start':49,'end':53},
+                    {'word':'after','start':89,'end':90}]}]
+            return [{'start':49,'end':50,'text':'fixed','words':[{'word':'fixed','start':49,'end':50}]}]
+        result,a,b,details=quality.recover_with_context(decode,0,100,100)
+        self.assertEqual(calls[-1],(46,56))
+        self.assertEqual([s['text'] for s in result],['before','fixed','after'])
+        self.assertTrue(details[-1]['local_repairs'][0]['resolved'])
+
+    def test_local_repair_still_rejects_unresolved_word(self):
+        calls=[]
+        def decode(a,b):
+            calls.append((a,b))
+            return [{'start':49,'end':53,'words':[{'word':'bad','start':49,'end':53}]}]
+        result,_,_,details=quality.recover_with_context(decode,0,100,100)
+        self.assertIsNone(result)
+        self.assertEqual(len(calls),6)
+        self.assertFalse(details[-1]['local_repairs'][0]['resolved'])
+
+    def test_realign_regression_uses_valid_decoder_bounds(self):
+        decoded=[{'words':[{'word':'Man,','start':1,'end':1.5}, {'word':'it','start':4,'end':4.2}]}]
+        aligned=[{'words':[{'word':'Man,','start':1,'end':4}, {'word':'it','start':4.1,'end':4.3}]}]
+        result=quality.preserve_valid_decoder_timing(aligned,decoded)
+        self.assertEqual(result[0]['words'][0]['end'],1.5)
+        self.assertEqual(aligned[0]['words'][0]['end'],4)
+        self.assertFalse(quality.suspicious_windows(result,10))
+        decoded[0]['words'][0]['end']=4.2
+        self.assertEqual(quality.preserve_valid_decoder_timing(aligned,decoded)[0]['words'][0]['end'],4)
+
     def test_repetition_at_another_time_survives(self):
         merged,added=quality.merge_recovery([{'start':0,'end':1,'text':'Hello.'}],[{'start':10,'end':11,'text':'Hello.'}])
         self.assertEqual(len(merged),2);self.assertEqual(len(added),1)

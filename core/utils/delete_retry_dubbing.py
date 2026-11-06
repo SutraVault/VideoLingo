@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 import os
 import shutil
 
@@ -21,11 +22,11 @@ def rebuild_audio_subtitles_and_clear_dubbing():
     align_timestamp_main()
 
     targets = [
-        os.path.join("output", "audio", "tts_tasks.xlsx"),
-        os.path.join("output", "audio", "tmp"),
-        os.path.join("output", "audio", "segs"),
-        os.path.join("output", "dub.wav"),
-        os.path.join("output", "output_dub.mp4"),
+        os.path.join(project_output("output"), "audio", "tts_tasks.xlsx"),
+        os.path.join(project_output("output"), "audio", "tmp"),
+        os.path.join(project_output("output"), "audio", "segs"),
+        os.path.join(project_output("output"), "dub.wav"),
+        os.path.join(project_output("output"), "output_dub.mp4"),
     ]
     removed = []
     for path in targets:
@@ -35,8 +36,8 @@ def rebuild_audio_subtitles_and_clear_dubbing():
 
 def delete_dubbing_files():
     files_to_delete = [
-        os.path.join("output", "dub.wav"),
-        os.path.join("output", "output_dub.mp4")
+        os.path.join(project_output("output"), "dub.wav"),
+        os.path.join(project_output("output"), "output_dub.mp4")
     ]
     
     for file_path in files_to_delete:
@@ -49,7 +50,7 @@ def delete_dubbing_files():
         else:
             print(f"File not found: {file_path}")
     
-    segs_folder = os.path.join("output", "audio", "segs")
+    segs_folder = os.path.join(project_output("output"), "audio", "segs")
     if os.path.exists(segs_folder):
         try:
             shutil.rmtree(segs_folder)

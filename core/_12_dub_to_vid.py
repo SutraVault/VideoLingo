@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output, subtitle_filter_path
 import platform
 import subprocess
 
@@ -12,10 +13,10 @@ from core.utils.models import *
 
 console = Console()
 
-DUB_VIDEO = "output/output_dub.mp4"
-DUB_SUB_FILE = 'output/dub.srt'
-DUB_AUDIO = 'output/dub.mp3'
-SRC_SUB_FILE = 'output/src.srt'
+DUB_VIDEO = project_output("output/output_dub.mp4")
+DUB_SUB_FILE = project_output('output/dub.srt')
+DUB_AUDIO = project_output('output/dub.mp3')
+SRC_SUB_FILE = project_output('output/src.srt')
 
 SRC_FONT_SIZE = 15
 TRANS_FONT_SIZE = 17
@@ -93,7 +94,7 @@ def merge_video_audio(subtitle_mode=None):
         raise ValueError('Invalid dubbing subtitle mode')
 
     # Normalize dub audio
-    normalized_dub_audio = 'output/normalized_dub.wav'
+    normalized_dub_audio = project_output('output/normalized_dub.wav')
     normalize_audio_volume(DUB_AUDIO, normalized_dub_audio)
     
     # Merge video and audio with translated subtitles
@@ -109,13 +110,13 @@ def merge_video_audio(subtitle_mode=None):
     )
     if subtitle_mode == 'bilingual':
         video_filter += (
-            f",subtitles={SRC_SUB_FILE}:force_style='FontSize={SRC_FONT_SIZE},"
+            f",subtitles={subtitle_filter_path(SRC_SUB_FILE)}:force_style='FontSize={SRC_FONT_SIZE},"
             f"FontName={FONT_NAME},PrimaryColour={SRC_FONT_COLOR},"
             f"OutlineColour={SRC_OUTLINE_COLOR},OutlineWidth={SRC_OUTLINE_WIDTH},"
             f"ShadowColour={SRC_SHADOW_COLOR},BorderStyle=1'")
     if subtitle_mode != 'none':
         video_filter += (
-            f",subtitles={DUB_SUB_FILE}:force_style='FontSize={TRANS_FONT_SIZE},"
+            f",subtitles={subtitle_filter_path(DUB_SUB_FILE)}:force_style='FontSize={TRANS_FONT_SIZE},"
             f"FontName={TRANS_FONT_NAME},PrimaryColour={TRANS_FONT_COLOR},"
             f"OutlineColour={TRANS_OUTLINE_COLOR},OutlineWidth={TRANS_OUTLINE_WIDTH},"
             f"BackColour={TRANS_BACK_COLOR},Alignment=2,MarginV=27,BorderStyle=4'")

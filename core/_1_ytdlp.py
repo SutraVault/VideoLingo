@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 import copy
 import os,sys
 import glob
@@ -53,7 +54,7 @@ def _format_candidates(resolution):
 def _build_ydl_opts(save_path, format_selector):
     ydl_opts = {
         'format': format_selector,
-        'outtmpl': f'{save_path}/%(title)s.%(ext)s',
+        'outtmpl': f'{save_path}/'+('source.%(ext)s' if os.environ.get('VL_OUTPUT_DIR') else '%(title)s.%(ext)s'),
         'noplaylist': True,
         'writethumbnail': True,
         'postprocessors': [{'key': 'FFmpegThumbnailsConvertor', 'format': 'jpg'}],
@@ -102,9 +103,10 @@ def select_creator_subtitle(subtitles, preferred_language="en"):
 
 
 def download_creator_subtitle(
-    YoutubeDL, url, save_path="output", preferred_language="en"
+    YoutubeDL, url, save_path=None, preferred_language="en"
 ):
     """Download the best uploader-provided subtitle as a normalized SRT."""
+    save_path = project_output('output') if save_path is None else save_path
     inspect_opts = {
         "skip_download": True,
         "noplaylist": True,
@@ -176,11 +178,12 @@ def _is_format_unavailable_error(error):
 
 def download_video_ytdlp(
     url,
-    save_path='output',
+    save_path=None,
     resolution='1080',
     prefer_creator_subtitles=False,
     subtitle_language=None,
 ):
+    save_path = project_output('output') if save_path is None else save_path
     os.makedirs(save_path, exist_ok=True)
 
     # Get YoutubeDL class after updating
@@ -262,12 +265,14 @@ def download_video_ytdlp(
 
     return {"creator_subtitle": creator_subtitle}
 
-def find_video_files(save_path='output'):
-    video_files = [file for file in glob.glob(save_path + "/*") if os.path.splitext(file)[1][1:].lower() in load_key("allowed_video_formats")]
+def find_video_files(save_path=None):
+    save_path = project_output('output') if save_path is None else save_path
+    directory = Path(save_path)
+    video_files = [str(file) for file in directory.iterdir() if file.is_file() and file.suffix[1:].lower() in load_key("allowed_video_formats")] if directory.exists() else []
     # change \\ to /, this happen on windows
     if sys.platform.startswith('win'):
         video_files = [file.replace("\\", "/") for file in video_files]
-    video_files = [file for file in video_files if not file.startswith("output/output")]
+    video_files = [file for file in video_files if os.path.basename(file).lower() not in ('output_sub.mp4', 'output_dub.mp4')]
     if len(video_files) != 1:
         raise ValueError(f"Number of videos found {len(video_files)} is not unique. Please check.")
     return video_files[0]

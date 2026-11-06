@@ -1,15 +1,18 @@
 """One task plan shared by upload, subtitle processing, dubbing and outputs."""
 from dataclasses import asdict,replace
 from pathlib import Path
-import hashlib,json,os,threading
+import hashlib,json,os,threading,builtins,re
 import streamlit as st
 from core.utils.workflow import Options,Project,FILES
+from core.utils.pipeline import operations
 from core.utils.config_utils import load_key,update_key,lock,yaml,CONFIG_PATH,invalidate_config_cache
 from core.st_utils.task_runner import TaskRunner
 from translations.translations import translate as t
 
-_jobs={}
-_lock=threading.RLock()
+# Source reloads must not discard live workers or allow duplicate jobs.
+if not hasattr(builtins,'_videolingo_workflow_runtime'):
+    builtins._videolingo_workflow_runtime=({},threading.RLock())
+_jobs,_lock=builtins._videolingo_workflow_runtime
 LABELS={'asr':'Speech recognition','nlp':'Sentence segmentation','meaning':'Semantic segmentation',
         'terms':'Extract terminology','translation':'Translate and proofread','split':'Split subtitles',
         'subtitles':'Generate subtitle files','original':'Original-audio subtitle video',
@@ -59,6 +62,17 @@ def job_for(source):
         p=Path(source).resolve();s=p.stat()
         key=(str(p),s.st_size,s.st_mtime_ns)
         if key not in _jobs:
+            # Adopt workers created before the persistent registry was installed.
+            for thread in threading.enumerate():
+                runner=getattr(getattr(thread,'_target',None),'__self__',None)
+                if type(runner).__name__!='TaskRunner' or not thread.is_alive():continue
+                for _,operation in getattr(runner,'_steps',[]):
+                    for cell in getattr(operation,'__closure__',None) or ():
+                        try:project=cell.cell_contents
+                        except ValueError:continue
+                        if type(project).__name__=='Project' and getattr(project,'source',None)==p:
+                            _jobs[key]=(project,runner)
+                            return _jobs[key]
             project=Project(p,options=replace(preference(),voice_revision=voice_revision(),translation_revision=translation_revision()))
             if not project.state.get('options'):project.set_options(preference())
             _jobs[key]=(project,TaskRunner())
@@ -207,21 +221,6 @@ def _preview_line(options,project=None):
     if not options.original and not options.dubbing:st.caption(t('Finish after generating the translation workbook and subtitle files.'))
 
 
-def operations(host,options):
-    return {
-        'asr':host['_2_asr'].transcribe,'nlp':host['_3_1_split_nlp'].split_by_spacy,
-        'meaning':host['_3_2_split_meaning'].split_sentences_by_meaning,
-        'terms':host['_4_1_summarize'].get_summary,
-        'translation':lambda:(host['_4_2_translate'].translate_all(),host['_4_3_proofread_translation'].proofread_translation_if_enabled()),
-        'split':host['_5_split_sub'].split_for_sub_main,'subtitles':host['_6_gen_sub'].align_timestamp_main,
-        'original':lambda:host['_7_sub_into_vid'].merge_subtitles_to_video(force_burn=True,subtitle_mode=options.original_subtitles),
-        'audio_tasks':lambda:(host['_8_1_audio_task'].gen_audio_task_main(),host['_8_2_dub_chunks'].gen_dub_chunks()),
-        'references':host['_9_refer_audio'].extract_refer_audio_main,'synthesis':host['_10_gen_audio'].gen_audio,
-        'merge_audio':host['_11_merge_audio'].merge_full_audio,
-        'dubbing':lambda:host['_12_dub_to_vid'].merge_video_audio(subtitle_mode=options.dub_subtitles),
-    }
-
-
 def start(job,host):
     project,runner=job
     if busy(runner):return
@@ -233,6 +232,28 @@ def start(job,host):
     steps.append((t('Finish current plan'),lambda:project.finish(boundary)))
     project.state.update(status='running',last_error='');project.save()
     runner.start(steps,run_label=t('Workflow processing'))
+
+
+def _render_runtime_log(job):
+    project,runner=job
+    current=project.state.get('current','')
+    if busy(runner):
+        st.info('正在处理：'+t(LABELS.get(current,current))+'。后台任务仍在运行，请勿重复启动。')
+    with st.expander('后台运行输出（每 2 秒刷新）',expanded=True):
+        log_path=getattr(runner,'runtime_log_path',None)
+        paths=[Path(log_path)] if log_path else []
+        found=False
+        for path in paths:
+            if not path.is_file():continue
+            found=True
+            with path.open('rb') as stream:
+                stream.seek(max(0,path.stat().st_size-16000))
+                text=stream.read(16000).decode('utf-8',errors='replace')
+            text=re.sub(r'sk-[A-Za-z0-9_-]+','[redacted]',text)
+            text=re.sub(r'\x1b\[[0-9;]*m','',text)
+            st.caption(str(path)+' · '+__import__('datetime').datetime.fromtimestamp(path.stat().st_mtime).strftime('%H:%M:%S'))
+            st.code('\n'.join(text.splitlines()[-70:]),language=None)
+        if not found:st.caption('当前任务尚无独立日志。已在运行的任务请查看启动终端；下次启动任务后将在此显示本次输出。')
 
 
 def _open(path):
@@ -255,6 +276,7 @@ def render_sections(job,host):
     if st.session_state.pop('_auto_start_translation_pending',False) and project.options.auto_start and project.state['status']=='ready':
         start(job,host);st.rerun()
     st.header(t('b. Translate and Generate Subtitles'))
+    _render_runtime_log(job)
     facts=project.facts()
     for key in ('asr','meaning','terms','translation','subtitles'):
         active=runner.is_active and project.state.get('current')==key
@@ -298,7 +320,7 @@ def render_sections(job,host):
             else:start(job,host)
             st.rerun()
     elif (project.next_plan()[0] or project.next_plan()[1]!='completed') and st.button(t('Start / continue workflow'),key='wf_start'):
-        start(job,host);st.rerun()
+        start(job,host);st.toast('处理已启动。当前步骤和后台输出将在此处刷新。');st.rerun()
     st.header(t('c. Dubbing'))
     if project.options.dubbing:
         st.write(t('Dubbing runs after subtitle files are ready and required reviews are confirmed.'))
@@ -337,6 +359,7 @@ def _results(job,host):
             if st.button(t('Start generating dubbed video'),key='wf_append_dubbing'):
                 project.set_options(replace(project.options,dubbing=True,dub_subtitles=mode))
                 start(job,host);st.rerun()
-    if not busy(runner) and project.state['status']=='completed':
+    # Saved subtitles can be archived even when a resumed/changed plan is unfinished.
+    if not busy(runner) and (project.state['status']=='completed' or (project.output/FILES['subtitles']).is_file()):
         if st.button(t("Archive to 'history'"),key='wf_archive'):
             host['cleanup']();st.rerun()

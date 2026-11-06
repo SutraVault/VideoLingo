@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 import pandas as pd
 import json
 import concurrent.futures
@@ -23,7 +24,7 @@ from core.utils.llm_stage_utils import (
     staged_llm_enabled,
 )
 console = Console()
-SOURCE_SUBTITLE_PATH = "output/source_subtitle.srt"
+SOURCE_SUBTITLE_PATH = project_output("output/source_subtitle.srt")
 
 
 def _translation_setting(key, default):

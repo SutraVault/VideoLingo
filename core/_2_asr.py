@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 from core.utils import *
 from core.asr_backend.demucs_vl import demucs_audio
 from core.asr_backend.audio_preprocess import process_transcription, convert_video_to_audio, split_audio, save_results, normalize_audio_volume
@@ -18,16 +19,16 @@ def transcribe():
     settings['demucs'] = load_key('demucs')
     settings['model_dir'] = load_key('model_dir')
     expected = fingerprint(video_file, settings)
-    if cache_matches('output', expected):
+    if cache_matches(project_output('output'), expected):
         rprint('[green]ASR source, settings and code unchanged; using validated cache.[/green]')
         return
-    manifest = Path('output/log/asr_manifest.json')
+    manifest = Path(project_output('output/log/asr_manifest.json'))
     try:
         old = json.loads(manifest.read_text())
         source_changed = old.get('source_sha256') != expected['source_sha256']
     except (OSError, ValueError):
         source_changed = True
-    backup = archive_stale('output', source_changed)
+    backup = archive_stale(project_output('output'), source_changed)
     rprint(f'[yellow]ASR cache changed or unversioned; archived old intermediates to {backup}[/yellow]')
     convert_video_to_audio(video_file)
 
@@ -70,7 +71,7 @@ def transcribe():
     settings = dict(load_key('whisper'))
     settings['demucs'] = load_key('demucs')
     settings['model_dir'] = load_key('model_dir')
-    save_manifest('output', fingerprint(video_file, settings))
+    save_manifest(project_output('output'), fingerprint(video_file, settings))
         
 if __name__ == "__main__":
     transcribe()

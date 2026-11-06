@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 import os
 import pandas as pd
 import warnings
@@ -12,7 +13,7 @@ def split_by_mark(nlp):
     language = load_key("whisper.detected_language") if whisper_language == 'auto' else whisper_language # consider force english case
     joiner = get_joiner(language)
     rprint(f"[blue]🔍 Using {language} language joiner: '{joiner}'[/blue]")
-    chunks = pd.read_excel("output/log/cleaned_chunks.xlsx")
+    chunks = pd.read_excel(project_output("output/log/cleaned_chunks.xlsx"))
     chunks.text = chunks.text.apply(lambda x: x.strip('"').strip())
     
     # join with joiner

@@ -70,7 +70,7 @@ def replace_window(segments, recovered, start, end):
     return sorted(kept+recovered,key=lambda s:s['start'])
 
 
-def recover_with_context(decode, start, end, duration, threshold=2.5, attempts=3, realign=None):
+def recover_with_context(decode, start, end, duration, threshold=2.5, attempts=3, realign=None, local_repair=True):
     """Retry unstable crop boundaries with bounded additional audio context.
 
     decode accepts clip bounds and returns word-timed segment dictionaries.
@@ -92,7 +92,8 @@ def recover_with_context(decode, start, end, duration, threshold=2.5, attempts=3
                 actual=normalize(' '.join(w['word'] for s in aligned for w in s.get('words',[])))
                 if not aligned or actual != expected:
                     raise ValueError('Acoustic alignment changed or dropped recovery words')
-                recovered=repair_isolated_zero_words(aligned)
+                recovered=repair_isolated_zero_words(
+                    preserve_valid_decoder_timing(aligned,recovered,threshold))
                 invalid=suspicious_windows(recovered,duration,threshold,padding=0)
                 diagnostic.update(segments=recovered,invalid_windows=invalid,acoustic_realignment=True)
             except Exception as exc:
@@ -100,7 +101,90 @@ def recover_with_context(decode, start, end, duration, threshold=2.5, attempts=3
         diagnostics.append(diagnostic)
         if recovered and not invalid:
             return recovered,a,b,diagnostics
+    # Broad conflict windows can span minutes. Re-decoding all of that audio
+    # repeatedly fixes one word while destabilizing another. Retry only the
+    # remaining defects of the final candidate, with bounded context/recursion.
+    if local_repair and diagnostics and recovered and invalid:
+        candidate=copy.deepcopy(recovered)
+        local_diagnostics=[]
+        repaired_start,repaired_end=a,b
+        windows=suspicious_windows(candidate,duration,threshold,padding=3)
+        for left,right in windows:
+            # A local repair must be smaller than the already attempted crop.
+            left=max(a,left);right=min(b,right)
+            if right-left >= b-a:
+                break
+            fixed,lo,hi,details=recover_with_context(
+                decode,left,right,duration,threshold,attempts,realign,local_repair=False)
+            local_diagnostics.append({'start':left,'end':right,'attempts':details,'resolved':fixed is not None})
+            if fixed is None:
+                break
+            candidate=replace_window(candidate,fixed,lo,hi)
+            repaired_start=min(repaired_start,lo)
+            repaired_end=max(repaired_end,hi)
+        else:
+            if not suspicious_windows(candidate,duration,threshold,padding=0):
+                diagnostics[-1]['local_repairs']=local_diagnostics
+                # Expanded local crops can extend beyond the broad candidate.
+                return candidate,repaired_start,repaired_end,diagnostics
+        diagnostics[-1]['local_repairs']=local_diagnostics
     return None,start,end,diagnostics
+
+
+def preserve_valid_decoder_timing(aligned, decoded, threshold=2.5):
+    """Restore valid decoder bounds only where acoustic alignment regressed.
+
+    Match normalized character spans because aligners can join split tokens.
+    Include touching neighbours when necessary; every restored decoder word
+    must be valid and ordered, and the group cannot cross aligned neighbours.
+    """
+    def valid(word):
+        return ('start' in word and 'end' in word
+                and 0 < word['end']-word['start'] <= threshold*max(1,len(word.get('word','').split())))
+
+    originals={}
+    offset=0
+    for segment in decoded:
+        for word in segment.get('words',[]):
+            end=offset+len(normalize(word.get('word','')))
+            if end>offset and valid(word):
+                originals[offset,end]=word
+            offset=end
+    result=copy.deepcopy(aligned)
+    words=[w for s in result for w in s.get('words',[])]
+    offset=0
+    matches=[]
+    for word in words:
+        end=offset+len(normalize(word.get('word','')))
+        matches.append(originals.get((offset,end)))
+        offset=end
+    for i,word in enumerate(words):
+        original=matches[i]
+        if valid(word) or original is None:
+            continue
+        left=right=i
+        while left and matches[left] is not None and words[left-1].get('end',float('inf'))>matches[left]['start']:
+            left-=1
+        while right+1<len(words) and matches[right] is not None and words[right+1].get('start',float('-inf'))<matches[right]['end']:
+            right+=1
+        group=matches[left:right+1]
+        if any(w is None for w in group):
+            continue
+        if any(a['end']>b['start'] for a,b in zip(group,group[1:])):
+            continue
+        if left and words[left-1].get('end',float('inf'))>group[0]['start']:
+            continue
+        if right+1<len(words) and words[right+1].get('start',float('-inf'))<group[-1]['end']:
+            continue
+        for target,source in zip(words[left:right+1],group):
+            target['original_timing']={'start':target.get('start'),'end':target.get('end')}
+            target.update(start=source['start'],end=source['end'],score=source.get('score',0),
+                          timing_method='validated_decoder_fallback')
+    for segment in result:
+        timed=segment.get('words',[])
+        if timed and all('start' in w and 'end' in w for w in timed):
+            segment.update(start=timed[0]['start'],end=timed[-1]['end'])
+    return result
 
 
 def repair_isolated_zero_words(segments):

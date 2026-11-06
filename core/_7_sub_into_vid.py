@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output, subtitle_filter_path
 import os, subprocess, time
 from core._1_ytdlp import find_video_files
 import cv2
@@ -28,7 +29,7 @@ TRANS_OUTLINE_COLOR = '&H000000'
 TRANS_OUTLINE_WIDTH = 1 
 TRANS_BACK_COLOR = '&H33000000'
 
-OUTPUT_DIR = "output"
+OUTPUT_DIR = project_output("output")
 OUTPUT_VIDEO = f"{OUTPUT_DIR}/output_sub.mp4"
 SRC_SRT = f"{OUTPUT_DIR}/src.srt"
 TRANS_SRT = f"{OUTPUT_DIR}/trans.srt"
@@ -75,11 +76,11 @@ def merge_subtitles_to_video(force_burn=False, subtitle_mode="bilingual"):
     ]
     if subtitle_mode == "bilingual":
         filters.append(
-            f"subtitles={SRC_SRT}:force_style='FontSize={SRC_FONT_SIZE},FontName={FONT_NAME},"
+            f"subtitles={subtitle_filter_path(SRC_SRT)}:force_style='FontSize={SRC_FONT_SIZE},FontName={FONT_NAME},"
             f"PrimaryColour={SRC_FONT_COLOR},OutlineColour={SRC_OUTLINE_COLOR},OutlineWidth={SRC_OUTLINE_WIDTH},"
             f"ShadowColour={SRC_SHADOW_COLOR},BorderStyle=1'")
     filters.append(
-        f"subtitles={TRANS_SRT}:force_style='FontSize={TRANS_FONT_SIZE},FontName={TRANS_FONT_NAME},"
+        f"subtitles={subtitle_filter_path(TRANS_SRT)}:force_style='FontSize={TRANS_FONT_SIZE},FontName={TRANS_FONT_NAME},"
         f"PrimaryColour={TRANS_FONT_COLOR},OutlineColour={TRANS_OUTLINE_COLOR},OutlineWidth={TRANS_OUTLINE_WIDTH},"
         f"BackColour={TRANS_BACK_COLOR},Alignment=2,MarginV=27,BorderStyle=4'")
     ffmpeg_cmd = ['ffmpeg', '-i', video_file, '-vf', ','.join(filters)]

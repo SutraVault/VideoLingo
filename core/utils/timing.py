@@ -1,4 +1,5 @@
 from __future__ import annotations
+from core.utils.project_paths import project_output
 
 import json
 import os
@@ -9,7 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-TIMING_LOG = Path("output/log/pipeline_timing.json")
+TIMING_LOG = Path(project_output("output/log/pipeline_timing.json"))
 _LOCK = threading.Lock()
 
 

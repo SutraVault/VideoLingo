@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 from pathlib import Path
 import ast
 import os
@@ -148,7 +149,7 @@ def start_indextts_server():
         raise FileNotFoundError(f"IndexTTS server file not found: {repo_dir / 'indextts_server.py'}")
 
     rprint("[bold yellow]Initializing IndexTTS server...[/bold yellow]")
-    log_dir = Path.cwd() / "output" / "log"
+    log_dir = Path.cwd() / project_output("output") / "log"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"indextts_{settings['version'].replace('.', '_')}_server.log"
     env = os.environ.copy()
@@ -235,7 +236,7 @@ def _sort_reference_path(path):
 def _shared_reference_audio(settings, current_dir, preferred=None):
     from core.tts_backend.reference_audio import prepare_reference
 
-    fallback = current_dir / "output/audio/refers/1.wav"
+    fallback = current_dir / project_output("output/audio/refers/1.wav")
     _ensure_reference_audio(fallback)
     candidates = sorted(fallback.parent.glob("*.wav"), key=_sort_reference_path)
     if preferred is not None and preferred.exists():
@@ -260,13 +261,16 @@ def _reference_audio_for(number):
     if refer_mode == 2:
         return _shared_reference_audio(settings, current_dir)
     if refer_mode == 3:
-        preferred = current_dir / f"output/audio/refers/{number}.wav"
+        preferred = current_dir / project_output(f"output/audio/refers/{number}.wav")
         _ensure_reference_audio(preferred)
         return _shared_reference_audio(settings, current_dir, preferred=preferred)
     raise ValueError("Invalid indextts.refer_mode. Choose 2 or 3.")
 
 
 def indextts_tts(text, save_path, ref_audio_path, duration_factor=None):
+    from core.utils.pronunciation import apply_rules, record_audio
+    source_text=str(text)
+    text=apply_rules(source_text)
     settings = _active_settings()
     api_url = f"http://{settings.get('host', '127.0.0.1')}:{settings.get('port', 9871)}/tts"
     save_path = Path(save_path)
@@ -299,6 +303,7 @@ def indextts_tts(text, save_path, ref_audio_path, duration_factor=None):
     result = response.json()
     if not result.get("ok"):
         raise RuntimeError(f"IndexTTS request failed: {result.get('error', 'unknown error')}")
+    record_audio(save_path,source_text,text)
     return True
 
 
@@ -410,7 +415,7 @@ def indextts_tts_for_videolingo(text, save_as, number, task_df):
         return result
     except Exception:
         if int(_active_settings().get("refer_mode", 2)) == 3:
-            fallback = Path.cwd() / "output/audio/refers/1.wav"
+            fallback = Path.cwd() / project_output("output/audio/refers/1.wav")
             _ensure_reference_audio(fallback)
             rprint("[yellow]IndexTTS failed with per-line reference audio; retrying with the first reference audio.[/yellow]")
             return indextts_tts(text, save_as, fallback)

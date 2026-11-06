@@ -8,7 +8,7 @@ from core.st_utils.task_runner import TaskRunner
 from core.st_utils import workflow_ui
 from core.st_utils import handoff_alarm
 # Also upgrade cached modules in sessions that predate the alarm change.
-if getattr(handoff_alarm, "ALARM_VERSION", 0) != 4:
+if getattr(handoff_alarm, "ALARM_VERSION", 0) != 7:
     import importlib
     importlib.reload(handoff_alarm)
 HandoffAlarm = handoff_alarm.HandoffAlarm
@@ -21,7 +21,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 os.environ["PATH"] += os.pathsep + current_dir
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-st.set_page_config(page_title="VideoLingo", page_icon="docs/logo.svg")
+st.set_page_config(page_title="VideoLingo", page_icon="docs/logo.svg", layout="wide", initial_sidebar_state="collapsed")
 
 SUB_VIDEO = "output/output_sub.mp4"
 DUB_VIDEO = "output/output_dub.mp4"
@@ -191,6 +191,7 @@ def _acknowledge_translation_review():
 
 
 def _stop_handoff_alarms():
+    handoff_alarm.stop_active_alarm()
     for notification_key, alarm in st.session_state.get("_handoff_alarms", {}).items():
         st.session_state.setdefault("_handoff_acknowledged", set()).add(notification_key)
         alarm.stop()
@@ -899,17 +900,13 @@ def audio_processing_section():
 
 
 def main():
-    logo_col, _ = st.columns([1, 1])
-    with logo_col:
-        st.image("docs/logo.png", width="stretch")
-    st.markdown(button_style, unsafe_allow_html=True)
-    welcome_text = t(
-        'Hello, welcome to VideoLingo. If you encounter any issues, feel free to get instant answers with our Free QA Agent <a href="https://share.fastgpt.in/chat/share?shareId=066w11n3r9aq6879r4z0v9rh" target="_blank">here</a>! You can also try out our SaaS website at <a href="https://videolingo.io" target="_blank">videolingo.io</a> for free!'
-    )
-    st.markdown(
-        f"<p style='font-size: 20px; color: #808080;'>{welcome_text}</p>",
-        unsafe_allow_html=True,
-    )
+    if workflow_ui.any_active():
+        handoff_alarm.stop_active_alarm()
+    with st.sidebar:
+        with st.expander('提示与帮助'):
+            if st.button(t("Stop alarm"), key="global_stop_alarm"):
+                _stop_handoff_alarms()
+                st.success("已发送停止响铃指令。")
     legacy_active = any(getattr(st.session_state.get(key), "is_active", False)
                         for key in ("_text_runner", "_audio_runner"))
     with st.sidebar:
@@ -923,26 +920,16 @@ def main():
         text_processing_section()
         audio_processing_section()
         return
-    try:
+    if workflow_ui.any_active():
+        st.info('旧工作流仍在运行；完成或停止后将显示项目库，避免同时占用处理资源。')
         from core._1_ytdlp import find_video_files
-        source = find_video_files()
-        job = workflow_ui.job_for(source)
-    except ValueError:
-        job = None
-    workflow_ui.render_controls(job)
-    workflow_ui.render_preview(job)
-    video_ready = download_video_section(locked=workflow_ui.any_active())
-    if video_ready:
-        if job is None:
-            from core._1_ytdlp import find_video_files
-            job = workflow_ui.job_for(find_video_files())
-        with st.expander(t("Optional: Use Existing Source Subtitles")):
-            if not workflow_ui.any_active():
-                source_subtitle_section()
-            else:
-                st.caption(t("Source subtitles cannot be replaced while a task is active."))
+        job = workflow_ui.job_for(find_video_files())
+        workflow_ui.render_controls(job)
+        workflow_ui.render_preview(job)
         workflow_ui.render_sections(job, globals())
-        _render_timing_report()
+        return
+    from core.st_utils.project_ui import render as render_projects
+    render_projects()
 
 
 

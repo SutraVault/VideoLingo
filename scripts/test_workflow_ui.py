@@ -18,7 +18,7 @@ tr.start_run=lambda *a,**k:'test'
 tr.start_step=lambda *a,**k:'test'
 tr.finish_step=lambda *a,**k:None
 tr.finish_run=lambda *a,**k:None
-tr.Path=lambda p:root/'output/log'
+tr.Path=lambda p:root/p
 ui.voice_revision=lambda:'test-voice'
 ui.save_preference=lambda options:None
 ui._open=lambda path:None
@@ -59,6 +59,9 @@ ui.render_sections((project,runner),host)
 
 class WorkflowUITests(unittest.TestCase):
     def setUp(self):
+        from core.st_utils import task_runner as tr
+        original={key:getattr(tr,key) for key in ('Path','start_run','start_step','finish_run','finish_step')}
+        self.addCleanup(lambda:[setattr(tr,key,value) for key,value in original.items()])
         base=ROOT/'work/workflow-ui-tests';base.mkdir(parents=True,exist_ok=True)
         self.temp=tempfile.TemporaryDirectory(dir=base);self.addCleanup(self.temp.cleanup)
         self.app=AppTest.from_string('TEST_DIRECTORY='+repr(self.temp.name)+'\n'+HARNESS,default_timeout=30).run()

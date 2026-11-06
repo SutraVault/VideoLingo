@@ -9,10 +9,12 @@ Usage:
 """
 
 from __future__ import annotations
+from core.utils.project_paths import project_output
 
 import threading
 import time
 import traceback
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -36,6 +38,7 @@ class TaskRunner:
     total_steps: int = 0
     current_label: str = ""
     error_msg: str = ""
+    runtime_log_path: str | None = None
 
     # Internal
     _pause_event: threading.Event = field(default_factory=threading.Event)
@@ -77,8 +80,19 @@ class TaskRunner:
         self._pause_event.set()
         self._stop_event.clear()
 
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        log_dir=Path(project_output('output/log/runtime'))
+        log_dir.mkdir(parents=True,exist_ok=True)
+        self.runtime_log_path=str(log_dir / (uuid.uuid4().hex+'.log'))
+        self._thread = threading.Thread(target=self._run_logged, daemon=True)
         self._thread.start()
+
+    def _run_logged(self):
+        from core.st_utils.runtime_output import capture_worker_output
+        with capture_worker_output(Path(self.runtime_log_path)):
+            print('当前任务开始')
+            self._run()
+            print('当前任务状态：'+self.state)
+            if self.error_msg:print(self.error_msg)
 
     def pause(self):
         if self.state == "running":
@@ -153,6 +167,7 @@ class TaskRunner:
 
                 self.current_step = i
                 self.current_label = label
+                print('\n> '+label,flush=True)
                 step_id = start_step(label, run_id=self._run_id)
                 try:
                     func()
@@ -168,7 +183,7 @@ class TaskRunner:
             self.error_msg = str(e)
             self.state = "error"
             finish_run(self._run_id, status="error", error=str(e))
-            log_dir = Path("output/log")
+            log_dir = Path(project_output("output/log"))
             log_dir.mkdir(parents=True, exist_ok=True)
             with open(log_dir / "task_runner_error.log", "a", encoding="utf-8") as f:
                 f.write(f"\n--- Error in step: {self.current_label} ---\n")

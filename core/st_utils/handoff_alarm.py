@@ -6,10 +6,35 @@ import sys
 import threading
 import wave
 
-ALARM_VERSION = 5
+ALARM_VERSION = 7
 # Preserve the active alarm across module reloads and browser sessions.
 _active_lock = globals().get("_active_lock", threading.Lock())
 _active_alarm = globals().get("_active_alarm", None)
+
+
+def stop_active_alarm():
+    """Stop alarms even when Streamlit discarded their module/session registry."""
+    alarms = []
+    with _active_lock:
+        if _active_alarm is not None:
+            alarms.append(_active_alarm)
+    # Streamlit can remove a module from sys.modules on a source change while
+    # its daemon threads keep running. Their bound targets retain the old alarm.
+    for thread in threading.enumerate():
+        target = getattr(thread, "_target", None)
+        owner = getattr(target, "__self__", None)
+        if (getattr(target, "__name__", None) == "_ring"
+                and type(owner).__name__ == "HandoffAlarm"
+                and type(owner).__module__ == __name__):
+            alarms.append(owner)
+    for alarm in alarms:
+        # Set cancellation before invoking any obsolete session callback.
+        alarm._stop.set()
+    for alarm in alarms:
+        thread = alarm._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2)
+    return len({id(alarm) for alarm in alarms})
 
 
 def _alarm_wav(kind, pulses=None):

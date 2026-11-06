@@ -24,8 +24,17 @@ def clean_text_for_tts(text):
         text = text.replace(char, '')
     return text.strip()
 
+
+def tts_cache_matches(text,save_as,method=None):
+    if (method or load_key('tts_method'))!='indextts':return os.path.exists(save_as)
+    from core.utils.pronunciation import cache_matches
+    return cache_matches(clean_text_for_tts(text),save_as)
+
 def tts_main(text, save_as, number, task_df):
     text = clean_text_for_tts(text)
+    if load_key('tts_method')=='indextts':
+        from core.utils.pronunciation import load_rules
+        load_rules()  # Configuration errors cannot be fixed by retrying synthesis.
     # Check if text is empty or single character, single character voiceovers are prone to bugs
     cleaned_text = re.sub(r'[^\w\s]', '', text).strip()
     if not cleaned_text or len(cleaned_text) <= 1:
@@ -35,8 +44,11 @@ def tts_main(text, save_as, number, task_df):
         return
     
     # Skip if file exists
-    if os.path.exists(save_as):
+    if tts_cache_matches(text,save_as):
         return
+    if os.path.exists(save_as):
+        from core.utils.pronunciation import preserve_stale_audio
+        preserve_stale_audio(save_as)
     
     print(f"Generating <{text}...>")
     TTS_METHOD = load_key("tts_method")

@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 import pandas as pd
 from typing import List, Tuple
 import concurrent.futures
@@ -18,7 +19,7 @@ from core.utils.models import *
 from core.utils.timing import record_event
 console = Console()
 
-SUBTITLE_SPLIT_TIMING_LOG = "output/log/subtitle_split_timing.json"
+SUBTITLE_SPLIT_TIMING_LOG = project_output("output/log/subtitle_split_timing.json")
 _split_timing_lock = threading.Lock()
 
 

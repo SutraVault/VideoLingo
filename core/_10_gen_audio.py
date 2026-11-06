@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 import os
 import ast
 import math
@@ -21,7 +22,7 @@ from core.utils import *
 from core.utils.models import *
 from core.utils.timing import timed_step
 from core.asr_backend.audio_preprocess import get_audio_duration
-from core.tts_backend.tts_main import tts_main
+from core.tts_backend.tts_main import tts_main, tts_cache_matches
 from core.tts_backend.estimate_duration import init_estimator, estimate_duration
 from core.prompts import get_tts_preflight_prompt
 from core.utils.llm_stage_utils import stage_api_config
@@ -38,7 +39,7 @@ TEMP_FILE_TEMPLATE = f"{_AUDIO_TMP_DIR}/{{}}_temp.wav"
 OUTPUT_FILE_TEMPLATE = f"{_AUDIO_SEGS_DIR}/{{}}.wav"
 WARMUP_SIZE = 5
 MAX_CHUNK_TRUNCATE_OVERFLOW = 1.2
-TTS_GENERATION_LOCK = "output/log/tts_generation.lock"
+TTS_GENERATION_LOCK = project_output("output/log/tts_generation.lock")
 
 
 def _task_lines(value):
@@ -550,6 +551,8 @@ def can_reuse_generated_tts(tasks_df: pd.DataFrame) -> bool:
         for line_index in range(len(lines)):
             temp_file = TEMP_FILE_TEMPLATE.format(f"{row['number']}_{line_index}")
             if not os.path.exists(temp_file):
+                return False
+            if not tts_cache_matches(lines[line_index],temp_file,method=load_key('tts_method')):
                 return False
             # The workbook is saved immediately after TTS completes. A much newer
             # workbook indicates that its task definitions may have changed.

@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 import json
 import os
 import time
@@ -15,7 +16,7 @@ from core.utils.proofread_context import PROOFREAD_ISSUE_TYPES, proofreading_win
 
 console = Console()
 
-PROOFREAD_LOCK = "output/log/translation_proofread.lock"
+PROOFREAD_LOCK = project_output("output/log/translation_proofread.lock")
 
 
 def is_proofread_running():

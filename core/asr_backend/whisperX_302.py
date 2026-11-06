@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 import os
 import io
 import json
@@ -9,7 +10,7 @@ from rich import print as rprint
 from core.utils import *
 from core.utils.models import *
 
-OUTPUT_LOG_DIR = "output/log"
+OUTPUT_LOG_DIR = project_output("output/log")
 def transcribe_audio_302(raw_audio_path: str, vocal_audio_path: str, start: float = None, end: float = None):
     os.makedirs(OUTPUT_LOG_DIR, exist_ok=True)
     LOG_FILE = f"{OUTPUT_LOG_DIR}/whisperx302_{start}_{end}.json"

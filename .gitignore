@@ -153,6 +153,8 @@ cython_debug/
 # history and output
 /output/
 /history/
+/Projects/
+/archive/
 _model_cache/
 
 batch/input/

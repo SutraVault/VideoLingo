@@ -2,8 +2,9 @@ from ruamel.yaml import YAML
 import threading
 from pathlib import Path
 import copy
+import os
 
-CONFIG_PATH = 'config.yaml'
+CONFIG_PATH = os.environ.get('VL_CONFIG_PATH', 'config.yaml')
 lock = threading.Lock()
 
 yaml = YAML()

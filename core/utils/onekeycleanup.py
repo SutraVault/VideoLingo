@@ -1,3 +1,4 @@
+from core.utils.project_paths import project_output
 import os
 import glob
 from core._1_ytdlp import find_video_files
@@ -19,23 +20,23 @@ def cleanup(history_dir="history"):
     os.makedirs(gpt_log_dir, exist_ok=True)
 
     # Move non-log files
-    for file in glob.glob("output/*"):
+    for file in glob.glob(project_output("output/*")):
         if not file.endswith(('log', 'gpt_log')):
             move_file(file, video_history_dir)
 
     # Move log files
-    for file in glob.glob("output/log/*"):
+    for file in glob.glob(project_output("output/log/*")):
         move_file(file, log_dir)
 
     # Move gpt_log files
-    for file in glob.glob("output/gpt_log/*"):
+    for file in glob.glob(project_output("output/gpt_log/*")):
         move_file(file, gpt_log_dir)
 
     # Delete empty output directories
     try:
-        os.rmdir("output/log")
-        os.rmdir("output/gpt_log")
-        os.rmdir("output")
+        os.rmdir(project_output("output/log"))
+        os.rmdir(project_output("output/gpt_log"))
+        os.rmdir(project_output("output"))
     except OSError:
         pass  # Ignore errors when deleting directories
 
